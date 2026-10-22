@@ -1,0 +1,2404 @@
+import React, { useState, useCallback, useRef, useEffect } from 'react';
+import toast from 'react-hot-toast';
+import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
+import Papa from 'papaparse';
+import Button from '../Button';
+import Spinner from '../Spinner';
+import { db, auth, handleFirestoreError, OperationType } from '../../src/firebase';
+import { collection, addDoc, query, where, orderBy, getDocs, Timestamp, onSnapshot, doc, updateDoc, getDoc, limit } from 'firebase/firestore';
+import { set as idbSet, get as idbGet, del as idbDel } from 'idb-keyval';
+import { mapHeadersWithAI, generateProductDescription } from '../../services/geminiService';
+  Settings,
+  RefreshCw,
+  Trash2,
+  Scissors,
+  CopyX,
+  Type,
+  ArrowDownToLine,
+  SplitSquareHorizontal,
+  PlusSquare,
+  MinusSquare,
+  Save,
+  Play,
+  FileSpreadsheet,
+  Download,
+  UploadCloud,
+  X,
+  Plus,
+  ChevronRight,
+  Database,
+  FileUp,
+  Image,
+  AlertTriangle,
+  CheckCircle,
+  Sparkles,
+  BookOpen,
+  HelpCircle,
+  Table,
+  Lightbulb
+} from 'lucide-react';
+
+const SpreadsheetEditorModal = ({ 
+  isOpen, 
+  onClose, 
+  title, 
+  text, 
+  onChange, 
+  hint,
+  id
+}: { 
+  isOpen: boolean; 
+  onClose: () => void; 
+  title: string; 
+  text: string; 
+  onChange: (t: string) => void; 
+  hint: string; 
+  id?: string;
+}) => {
+  const parsedData = React.useMemo(() => {
+    if (!text) return [];
+    return Papa.parse(text, { delimiter: '\t', header: false, skipEmptyLines: true }).data as string[][];
+  }, [text]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+      <div className="bg-zinc-900 border border-zinc-800 rounded-xl w-full max-w-6xl h-[85vh] flex flex-col shadow-2xl">
+        <div className="p-4 border-b border-zinc-800 flex items-center justify-between bg-zinc-950/50 rounded-t-xl">
+           <h3 className="text-lg font-bold text-sky-400 flex items-center gap-2">
+             <Table className="w-5 h-5" />
+             {title}
+           </h3>
+           <button onClick={onClose} className="p-1 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800 rounded transition-colors"><X className="w-5 h-5"/></button>
+        </div>
+        <div className="p-4 flex-1 flex flex-col gap-4 min-h-0 bg-zinc-950/20">
+           <p className="text-sm text-zinc-400">{hint}</p>
+           <textarea 
+              id={id}
+              className="w-full h-32 bg-zinc-950 border border-zinc-800 rounded-lg p-3 text-sm text-zinc-300 font-mono resize-y focus:outline-none focus:border-sky-500/50 shadow-inner"
+              placeholder="Paste (Ctrl+V / Cmd+V) dữ liệu từ Excel vào đây..."
+              value={text}
+              onChange={(e) => onChange(e.target.value)}
+           />
+           {parsedData.length > 0 ? (
+              <div className="flex-1 overflow-auto border border-zinc-800 rounded-lg bg-zinc-950 shadow-inner">
+                 <table className="w-full text-left border-collapse text-xs">
+                    <thead className="sticky top-0 z-10">
+                       <tr>
+                         <th className="border border-zinc-800 p-2 bg-zinc-900 text-zinc-400 text-center w-12 font-medium">#</th>
+                         {parsedData[0].map((h, i) => <th key={i} className="border border-zinc-800 p-2 bg-zinc-900 text-zinc-300 whitespace-nowrap font-medium">{h}</th>)}
+                       </tr>
+                    </thead>
+                    <tbody>
+                       {parsedData.slice(1).map((row, rIdx) => (
+                          <tr key={rIdx} className="hover:bg-zinc-900/50 transition-colors">
+                             <td className="border border-zinc-800 p-2 text-zinc-500 text-center bg-zinc-900/30">{rIdx + 2}</td>
+                             {row.map((cell, cIdx) => (
+                                <td key={cIdx} className="border border-zinc-800 p-2 text-zinc-300 whitespace-nowrap">{cell}</td>
+                             ))}
+                          </tr>
+                       ))}
+                    </tbody>
+                 </table>
+              </div>
+           ) : (
+              <div className="flex-1 flex flex-col items-center justify-center border border-dashed border-zinc-800 rounded-lg text-zinc-600 bg-zinc-950/50">
+                 <Table className="w-12 h-12 mb-3 opacity-20" />
+                 <p>Bảng dữ liệu sẽ hiển thị tại đây sau khi bạn Paste (Dán) nội dung.</p>
+              </div>
+           )}
+        </div>
+        <div className="p-4 border-t border-zinc-800 flex justify-between bg-zinc-950/50 rounded-b-xl">
+           <div className="text-sm text-zinc-500 flex items-center">
+             {parsedData.length > 0 && `Đã tải ${parsedData.length} dòng dữ liệu.`}
+           </div>
+           <div className="flex gap-3">
+             <Button onClick={() => onChange('')} className="bg-zinc-900 border border-zinc-800 hover:bg-zinc-800 hover:text-red-400 transition-colors">
+               <Trash2 className="w-4 h-4 mr-2" /> Xóa dữ liệu
+             </Button>
+             <Button onClick={onClose} className="bg-sky-600 hover:bg-sky-500 text-white shadow-md shadow-sky-900/20">
+               <CheckCircle className="w-4 h-4 mr-2" /> Hoàn tất & Đóng
+             </Button>
+           </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const FileInput: React.FC<{
+  id: string;
+  label: string;
+  file: File | null;
+  onFileChange: (file: File) => void;
+  onClear: () => void;
+}> = ({ id, label, file, onFileChange, onClear }) => {
+  const [isDragging, setIsDragging] = useState(false);
+
+  const handleDragOver = (e: React.DragEvent<HTMLLabelElement>) => {
+    e.preventDefault();
+    setIsDragging(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent<HTMLLabelElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLLabelElement>) => {
+    e.preventDefault();
+    setIsDragging(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      onFileChange(e.dataTransfer.files[0]);
+    }
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      <label htmlFor={id} className="block text-[11px] font-semibold text-zinc-400 uppercase tracking-wider mb-2">
+        {label}
+      </label>
+      {file ? (
+        <div className="flex items-center justify-between p-3 bg-sky-500/10 border border-sky-500/30 rounded-xl text-sky-100 shadow-inner">
+          <div className="flex items-center gap-3 overflow-hidden">
+            <div className="p-2 bg-sky-500/20 rounded-lg shrink-0">
+              <FileSpreadsheet className="w-5 h-5 text-sky-400" />
+            </div>
+            <div className="flex flex-col truncate">
+              <span className="truncate font-medium text-sm">{file.name}</span>
+              <span className="text-xs text-sky-400/70">{(file.size / 1024 / 1024).toFixed(2)} MB</span>
+            </div>
+          </div>
+          <button onClick={onClear} className="p-2 text-sky-400/70 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors shrink-0">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      ) : (
+        <label
+          htmlFor={id}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+          className={`flex flex-col items-center justify-center w-full h-full min-h-[100px] px-4 py-6 transition-all border-2 border-dashed rounded-xl appearance-none cursor-pointer focus:outline-none group ${
+            isDragging 
+              ? 'bg-sky-500/10 border-sky-500 scale-[0.99] shadow-lg shadow-sky-500/20' 
+              : 'bg-zinc-900/40 border-zinc-700 hover:border-sky-500/50 hover:bg-sky-500/5'
+          }`}
+        >
+          <div className={`p-3 rounded-full transition-colors mb-3 ${
+            isDragging ? 'bg-sky-500/20' : 'bg-zinc-800 group-hover:bg-sky-500/20'
+          }`}>
+            <UploadCloud className={`w-6 h-6 transition-colors ${
+              isDragging ? 'text-sky-400 animate-bounce' : 'text-zinc-400 group-hover:text-sky-400'
+            }`} />
+          </div>
+          <span className={`block text-sm font-medium transition-colors ${
+            isDragging ? 'text-sky-300' : 'text-zinc-300 group-hover:text-sky-300'
+          }`}>
+            {isDragging ? 'Thả file vào đây' : 'Nhấp hoặc Kéo thả file vào đây'}
+          </span>
+          <span className="mt-1 block text-xs text-zinc-500">Hỗ trợ .xlsx, .xls, .csv (Tối đa 50MB)</span>
+          <input
+            id={id}
+            type="file"
+            accept=".xlsx, .xls, .csv"
+            className="hidden"
+            onChange={(e) => e.target.files && onFileChange(e.target.files[0])}
+          />
+        </label>
+      )}
+    </div>
+  );
+};
+
+const SelectInput: React.FC<React.SelectHTMLAttributes<HTMLSelectElement> & { options: string[], label: string }> = ({ options, label, ...props }) => (
+    <div>
+        <label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block mb-1.5">{label}</label>
+        <select
+            {...props}
+            className="w-full bg-zinc-900/50 border border-zinc-700/50 rounded-lg py-2 px-3 text-zinc-200 text-sm placeholder-zinc-600 focus:ring-2 focus:ring-sky-500/50 focus:border-sky-500 outline-none transition duration-200 disabled:opacity-50 hover:bg-zinc-800/50"
+        >
+            <option value="">{`-- Chọn Cột --`}</option>
+            {options.map((header, i) => <option key={i} value={header}>{header}</option>)}
+        </select>
+    </div>
+);
+
+const getOperationConfig = (type: string) => {
+  switch (type) {
+    case 'remove_empty_rows': return { icon: Trash2, color: 'text-red-400', bg: 'bg-red-400/10', border: 'border-red-400/20', label: 'Xóa dòng trống' };
+    case 'trim_whitespace': return { icon: Scissors, color: 'text-amber-400', bg: 'bg-amber-400/10', border: 'border-amber-400/20', label: 'Xóa khoảng trắng thừa' };
+    case 'remove_duplicates': return { icon: CopyX, color: 'text-orange-400', bg: 'bg-orange-400/10', border: 'border-orange-400/20', label: 'Xóa dòng trùng lặp' };
+    case 'text_standardization': return { icon: Type, color: 'text-blue-400', bg: 'bg-blue-400/10', border: 'border-blue-400/20', label: 'Chuẩn hóa văn bản' };
+    case 'fill_down': return { icon: ArrowDownToLine, color: 'text-emerald-400', bg: 'bg-emerald-400/10', border: 'border-emerald-400/20', label: 'Điền dữ liệu xuống dưới' };
+    case 'extract_text': return { icon: SplitSquareHorizontal, color: 'text-purple-400', bg: 'bg-purple-400/10', border: 'border-purple-400/20', label: 'Trích xuất văn bản' };
+    case 'add_column': return { icon: PlusSquare, color: 'text-teal-400', bg: 'bg-teal-400/10', border: 'border-teal-400/20', label: 'Thêm cột mới' };
+    case 'remove_columns': return { icon: MinusSquare, color: 'text-rose-400', bg: 'bg-rose-400/10', border: 'border-rose-400/20', label: 'Xóa cột' };
+    case 'convert_to_png': return { icon: Image, color: 'text-indigo-400', bg: 'bg-indigo-400/10', border: 'border-indigo-400/20', label: 'Chuyển đuôi file sang PNG' };
+    default: return { icon: Settings, color: 'text-zinc-400', bg: 'bg-zinc-400/10', border: 'border-zinc-400/20', label: type };
+  }
+};
+
+interface MappingRule {
+  id: number;
+  source: string;
+  destination: string;
+}
+
+const MappingModal = ({
+  isOpen,
+  rawHeaders,
+  tplHeaders,
+  initialMapping,
+  onConfirm,
+  onCancel
+}: {
+  isOpen: boolean;
+  rawHeaders: string[];
+  tplHeaders: string[];
+  initialMapping: Record<string, string>;
+  onConfirm: (mapping: Record<string, string>) => void;
+  onCancel: () => void;
+}) => {
+  const [mapping, setMapping] = useState<Record<string, string>>({});
+
+  useEffect(() => {
+    const targetToSource: Record<string, string> = {};
+    Object.entries(initialMapping).forEach(([source, target]) => {
+      if (source && target) targetToSource[target] = source;
+    });
+    setMapping(targetToSource);
+  }, [initialMapping, isOpen]);
+
+  const handleConfirm = () => {
+      const finalMapping: Record<string, string> = {};
+      Object.entries(mapping).forEach(([target, source]) => {
+          if (source && target) finalMapping[source] = target;
+      });
+      onConfirm(finalMapping);
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+      <div className="bg-zinc-900 border border-zinc-700/50 rounded-2xl shadow-2xl w-full max-w-4xl flex flex-col max-h-[90vh]">
+        <div className="p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-800/30">
+          <h2 className="text-lg font-bold text-sky-400 flex items-center gap-2">
+            <RefreshCw className="w-5 h-5" /> Xác nhận Ánh xạ Cột
+          </h2>
+          <button onClick={onCancel} className="text-zinc-400 hover:text-white transition-colors">
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="p-6 overflow-y-auto flex-1 text-sm text-zinc-300">
+          <p className="mb-4 text-zinc-400">Hệ thống AI đã tự động ánh xạ các cột. Vui lòng kiểm tra và điều chỉnh nếu cần thiết trước khi xử lý.</p>
+          
+          <div className="grid grid-cols-[1fr_auto_1fr] gap-4 items-center">
+            <div className="font-semibold text-zinc-300 mb-2 px-2">Cột Biểu Mẫu (Cần điền)</div>
+            <div className="w-8"></div>
+            <div className="font-semibold text-zinc-300 mb-2 px-2">Cột File Thô (Nguồn)</div>
+            
+            {tplHeaders.map((tHeader, i) => (
+               <React.Fragment key={i}>
+                 <div className="flex items-center bg-zinc-800/50 px-3 py-2.5 rounded-lg border border-zinc-700/50 min-h-[42px]">
+                    <span className="truncate" title={tHeader}>{tHeader}</span>
+                 </div>
+                 <div className="flex justify-center text-zinc-600">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                 </div>
+                 <div>
+                    <select
+                      className="w-full bg-zinc-900/80 border border-zinc-700/80 rounded-lg py-2 px-3 text-zinc-200 text-sm focus:ring-2 focus:ring-sky-500/50 focus:border-sky-500 outline-none transition duration-200 hover:bg-zinc-800/80"
+                      value={mapping[tHeader] || ''}
+                      onChange={(e) => setMapping({ ...mapping, [tHeader]: e.target.value })}
+                    >
+                      <option value="">-- Bỏ qua / Tự động --</option>
+                      {rawHeaders.map((rHeader, j) => (
+                         <option key={j} value={rHeader}>{rHeader}</option>
+                      ))}
+                    </select>
+                 </div>
+               </React.Fragment>
+            ))}
+          </div>
+        </div>
+        <div className="p-4 border-t border-zinc-800 bg-zinc-900 flex justify-end gap-3 rounded-b-2xl">
+          <Button onClick={onCancel} variant="secondary">Hủy bỏ</Button>
+          <Button onClick={handleConfirm} colorScheme="sky">Tiếp tục xử lý</Button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const FileConverterV2Tab: React.FC = () => {
+  const [activeSubTab, setActiveSubTab] = useState<'clean' | 'merge' | 'workflow' | 'history'>('workflow');
+
+  // --- State for "Workflow" Tab ---
+  const [showWorkflowGuide, setShowWorkflowGuide] = useState(false);
+  const [showDictionaryConfig, setShowDictionaryConfig] = useState(false);
+  
+  const [workflowRawFile, setWorkflowRawFile] = useState<File | null>(null);
+  const [templateText, setTemplateText] = useState<string>('');
+  const [dictionaryText, setDictionaryText] = useState<string>('');
+  const [isDictionarySaved, setIsDictionarySaved] = useState<boolean>(false);
+  const [isWorkflowProcessing, setIsWorkflowProcessing] = useState<boolean>(false);
+  const [useAiDeepMatch, setUseAiDeepMatch] = useState<boolean>(true);
+  const [useSmartPrompt, setUseSmartPrompt] = useState<boolean>(true);
+  const [totalTokensSaved, setTotalTokensSaved] = useState<number>(0);
+  const [workflowStatus, setWorkflowStatus] = useState<string>('');
+  const [workflowError, setWorkflowError] = useState<string | null>(null);
+  const [workflowSuccess, setWorkflowSuccess] = useState<string | null>(null);
+
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [showDictionaryModal, setShowDictionaryModal] = useState(false);
+  const [showTokenOptGuide, setShowTokenOptGuide] = useState(false);
+
+  const [mappingDialog, setMappingDialog] = useState<{
+    isOpen: boolean;
+    rawHeaders: string[];
+    tplHeaders: string[];
+    mapping: Record<string, string>;
+    resolve: (mapping: Record<string, string> | null) => void;
+  } | null>(null);
+
+  interface MatchingLog {
+    rowIndex: number;
+    columnName: string;
+    rawValue: string;
+    mappedValue: string | null;
+    finalValue: string;
+    hasError: boolean;
+  }
+  const [matchingLogs, setMatchingLogs] = useState<MatchingLog[]>([]);
+
+  useEffect(() => {
+    const loadSavedData = async () => {
+      try {
+        const savedTemplate = localStorage.getItem('v2_templateText');
+        if (savedTemplate) setTemplateText(savedTemplate);
+
+        const savedDict = localStorage.getItem('v2_dictionaryText');
+        if (savedDict) {
+          setDictionaryText(savedDict);
+          setIsDictionarySaved(true);
+        }
+
+        if (auth.currentUser) {
+          // If not in IDB/localStorage, try fetching from Firestore (cloud backup)
+          const userDoc = await getDoc(doc(db, 'users', auth.currentUser.uid));
+          if (userDoc.exists()) {
+              if (userDoc.data().v2_dictionaryText && !savedDict) {
+                 setDictionaryText(userDoc.data().v2_dictionaryText);
+                 setIsDictionarySaved(true);
+                 localStorage.setItem('v2_dictionaryText', userDoc.data().v2_dictionaryText);
+              }
+              if (userDoc.data().v2_templateText && !savedTemplate) {
+                 setTemplateText(userDoc.data().v2_templateText);
+                 localStorage.setItem('v2_templateText', userDoc.data().v2_templateText);
+              }
+          }
+        }
+      } catch (err) {
+        console.error("Error loading data:", err);
+      }
+    };
+    loadSavedData();
+  }, []);
+
+  const handleTemplateChange = async (text: string) => {
+    setTemplateText(text);
+    localStorage.setItem('v2_templateText', text);
+    try {
+      if (auth.currentUser) {
+          await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+            v2_templateText: text
+          });
+      }
+    } catch (err) {
+      console.error("Error saving template to Firestore:", err);
+    }
+  };
+
+  const handleDictionaryChange = async (text: string) => {
+    setDictionaryText(text);
+    localStorage.setItem('v2_dictionaryText', text);
+    setIsDictionarySaved(true);
+    try {
+      if (auth.currentUser) {
+          await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+            v2_dictionaryText: text
+          });
+      }
+    } catch (err) {
+      console.error("Error saving dictionary to Firestore:", err);
+    }
+  };
+
+  const handleDictionaryClear = async () => {
+    setDictionaryText('');
+    localStorage.removeItem('v2_dictionaryText');
+    setIsDictionarySaved(false);
+    try {
+      if (auth.currentUser) {
+         await updateDoc(doc(db, 'users', auth.currentUser.uid), {
+            v2_dictionaryText: null
+         });
+      }
+    } catch (err) {
+      console.error("Error deleting dictionary from Firestore:", err);
+    }
+  };
+
+  const handleDownloadStandardTemplate = () => {
+    const defaultHeaders = ['STT', 'Hành động', 'Mã SP', 'Tên SP', 'Barcode', 'Đơn vị tính', 'Nhóm hàng', 'Thương hiệu', 'Xuất xứ', 'VAT', 'Phân loại', 'Màu sắc', 'Kiểu dáng', 'Size', 'Trọng lượng', 'Đường dẫn (Link)'];
+    const newWorksheet = XLSX.utils.aoa_to_sheet([defaultHeaders]);
+    const newWorkbook = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(newWorkbook, newWorksheet, 'Nhập liệu');
+    const output = XLSX.write(newWorkbook, { bookType: 'xlsx', type: 'array' });
+    const blob = new Blob([output], { type: 'application/vnd.openxmlformats-officedocument.spreadsheet.sheet' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = "Bieu_Mau_Chuan_Hoa_Sapo.xlsx";
+    document.body.appendChild(a);
+    a.click();
+    URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+  };
+
+  const handleProcessWorkflow = async () => {
+    if (!workflowRawFile || !templateText || !dictionaryText) return;
+    
+    setIsWorkflowProcessing(true);
+    setWorkflowError(null);
+    setWorkflowSuccess(null);
+    setMatchingLogs([]);
+
+    const tempLogs: MatchingLog[] = [];
+
+    try {
+      setWorkflowStatus('Đọc file dữ liệu thô...');
+      // 1. Read Raw File
+      const rawBuffer = await workflowRawFile.arrayBuffer();
+      const rawText = new TextDecoder().decode(rawBuffer);
+      let rawData: any[][] = [];
+      if (workflowRawFile.name.toLowerCase().endsWith('.csv')) {
+        rawData = Papa.parse(rawText, { skipEmptyLines: true, header: false }).data as any[][];
+      } else {
+        const wb = XLSX.read(rawBuffer, { type: 'array' });
+        rawData = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: '' }) as any[][];
+      }
+
+      setWorkflowStatus('Đọc file biểu mẫu...');
+      // 2. Read Template File
+      const tplRawData = Papa.parse(templateText, { delimiter: '\t', header: false, skipEmptyLines: true }).data as any[][];
+      const tplHeaders = tplRawData[0] ? tplRawData[0].map(h => String(h)) : [];
+      
+      const isExampleRow = (row: any[]) => {
+         if (!row || !row[0]) return false;
+         const val = String(row[0]).replace(/\s+/g, '').toUpperCase();
+         return val === 'VD' || val.startsWith('VD:');
+      };
+      
+      const tplExamples = tplRawData.filter(isExampleRow);
+      const tplDataSample = tplExamples.length > 0 ? tplExamples : tplRawData.slice(1, 4); // Extract sample data from template to help AI
+      
+      setWorkflowStatus('Đọc file từ điển...');
+      // 3. Read Dictionary File
+      const dictRawData = Papa.parse(dictionaryText, { delimiter: '\t', header: false, skipEmptyLines: true }).data as any[][];
+      
+      const dictSheets: { headers: string[], rows: any[][] }[] = [];
+      if (dictRawData.length > 0) {
+         dictSheets.push({
+             headers: dictRawData[0].map(h => String(h).trim().toLowerCase()),
+             rows: dictRawData.slice(1)
+         });
+      }
+
+      // Smart Dictionary Lookup function
+      const lookupInDictionary = (searchValue: string, targetHeader: string): string | null => {
+          if (!searchValue) return null;
+          const searchLower = searchValue.trim().toLowerCase();
+          const targetHeaderLower = targetHeader.trim().toLowerCase();
+
+          let debugLog = `[DEBUG Dictionary] Search: "${searchValue}", Target Header: "${targetHeader}" -> `;
+
+          for (const sheet of dictSheets) {
+              // Try to find the target column in this dictionary sheet
+              let targetColIdx = sheet.headers.indexOf(targetHeaderLower);
+              
+              if (targetColIdx === -1) {
+                  // Fallbacks for common headers
+                  const fallbacks = [targetHeaderLower, targetHeaderLower.replace('mã_tên ', ''), targetHeaderLower.replace('tên ', ''), targetHeaderLower.replace('mã ', '')];
+                  targetColIdx = sheet.headers.findIndex(h => fallbacks.some(f => h.includes(f) || f.includes(h)));
+              }
+
+              for (const row of sheet.rows) {
+                  let matchFound = false;
+                  for (let i = 0; i < row.length; i++) {
+                      const cellValLower = String(row[i]).trim().toLowerCase();
+                      if (cellValLower === searchLower) {
+                          matchFound = true;
+                          break;
+                      }
+                      // Also match if the cell is like "B1188_Chicco" and search is "Chicco"
+                      if (cellValLower.includes('_')) {
+                          const parts = cellValLower.split('_');
+                          if (parts.some(p => p.trim() === searchLower)) {
+                              matchFound = true;
+                              break;
+                          }
+                      }
+                  }
+
+                  if (matchFound) {
+                      let matchedValue = targetColIdx !== -1 && row[targetColIdx] ? String(row[targetColIdx]).trim() : null;
+                      
+                      // If the matched column simply returns the exact same search value,
+                      // let's try to see if there is another column that looks like a code (contains '_')
+                      // because the user usually wants the encoded mapping (e.g. 'Chicco' -> 'B1188_Chicco')
+                      if (!matchedValue || matchedValue.toLowerCase() === searchLower) {
+                          // Ưu tiên tìm chuỗi có dấu '_' trong cùng hàng
+                          for (let i = 0; i < row.length; i++) {
+                              const cellVal = String(row[i]).trim();
+                              if (cellVal && cellVal.includes('_')) {
+                                  console.log(debugLog + `Fallback matched underscore value: "${cellVal}"`);
+                                  return cellVal;
+                              }
+                          }
+                      }
+
+                      if (matchedValue && matchedValue.toLowerCase() !== searchLower) {
+                          console.log(debugLog + `Matched exactly at column index ${targetColIdx}: "${matchedValue}"`);
+                          return matchedValue;
+                      }
+                      
+                      if (matchedValue) {
+                          console.log(debugLog + `Fallback matched same value: "${matchedValue}"`);
+                          return matchedValue;
+                      }
+
+                      // Fallback: first different value (if no matchedValue from targetColIdx)
+                      for (let i = 0; i < row.length; i++) {
+                          const cellVal = String(row[i]).trim();
+                          if (cellVal && cellVal.toLowerCase() !== searchLower) {
+                              console.log(debugLog + `Fallback matched different value: "${cellVal}"`);
+                              return cellVal;
+                          }
+                      }
+                      
+                      // If really nothing else
+                      return searchLower;
+                  }
+              }
+          }
+          console.log(debugLog + "NO MATCH FOUND");
+          return null;
+      };
+
+      // Combine AI Deep Match for Header Mapping
+      let headerRowIndex = 0;
+      for (let i = 0; i < Math.min(rawData.length, 10); i++) {
+          const row = rawData[i];
+          if (row && row.length > 0 && row.some((cell: any) => cell && String(cell).trim() !== '')) {
+              headerRowIndex = i;
+              break;
+          }
+      }
+      const rawHeaders = rawData[headerRowIndex] || [];
+      const rawExamples = rawData.filter(isExampleRow);
+      const rawDataSample = rawExamples.length > 0 ? rawExamples : rawData.slice(headerRowIndex + 1, headerRowIndex + 4); // Take row samples
+
+      let headerMapping: Record<string, string> = {};
+      let valueRules: Array<{sourceColumn: string, targetColumn: string, sourceValue: string, targetValue: string}> = [];
+      if (useAiDeepMatch) {
+         setWorkflowStatus('Sử dụng AI phân tích ánh xạ cột...');
+         const aiResult = await mapHeadersWithAI(Array.isArray(rawHeaders) ? rawHeaders.map(String) : [], tplHeaders, rawDataSample, tplDataSample, useSmartPrompt);
+         headerMapping = aiResult.headerMapping;
+         valueRules = aiResult.valueRules;
+         if (aiResult.estimatedTokensSaved) {
+             setTotalTokensSaved(prev => prev + aiResult.estimatedTokensSaved!);
+         }
+      }
+      
+      setWorkflowStatus('Chờ xác nhận ánh xạ cột...');
+      const finalMapping = await new Promise<Record<string, string> | null>((resolve) => {
+          setMappingDialog({
+              isOpen: true,
+              rawHeaders: Array.isArray(rawHeaders) ? rawHeaders.map(String) : [],
+              tplHeaders: tplHeaders,
+              mapping: headerMapping,
+              resolve
+          });
+      });
+      
+      setMappingDialog(null);
+      
+      if (!finalMapping) {
+          setIsWorkflowProcessing(false);
+          setWorkflowStatus('');
+          return; // Cancelled
+      }
+      
+      headerMapping = finalMapping;
+
+      setWorkflowStatus('Đang ánh xạ và chuẩn hóa dữ liệu...');
+      const outputData = [tplHeaders];
+      
+      const workbook = new ExcelJS.Workbook();
+      const worksheet = workbook.addWorksheet('Nhập liệu');
+      worksheet.addRow(tplHeaders);
+      
+      // Auto-increment STT Counter
+      let sttCounter = 1;
+      
+      for (let i = headerRowIndex + 1; i < rawData.length; i++) {
+        const row = rawData[i];
+        if (!row || row.length === 0) continue;
+        const isEmptyRow = row.every((cell: any) => cell === undefined || cell === null || String(cell).trim() === '');
+        if (isEmptyRow) continue; // Bỏ qua dòng trống
+        if (isExampleRow(row)) continue; // Bỏ qua dòng ví dụ mẫu
+        
+        const outRow = new Array(tplHeaders.length).fill('');
+        let hasMappingError = false;
+        
+        // Find special columns index in raw
+        const getRawVal = (possibleKeys: string[], currentTargetHeader?: string) => {
+            const keysToCheck = currentTargetHeader ? [currentTargetHeader, ...possibleKeys] : possibleKeys;
+            const cleanKey = (s: string) => String(s).replace(/[\s\*\n\r]/g, '').toLowerCase();
+
+            for (const key of keysToCheck) {
+                let idx = -1;
+                if (useAiDeepMatch) {
+                    const matchedSourceKey = Object.keys(headerMapping).find(k => cleanKey(headerMapping[k]) === cleanKey(key));
+                    if (matchedSourceKey) {
+                        idx = rawHeaders.findIndex(h => cleanKey(h) === cleanKey(matchedSourceKey));
+                    }
+                }
+                if (idx === -1) {
+                    idx = rawHeaders.findIndex((h: string) => h && cleanKey(h) === cleanKey(key));
+                }
+                if (idx !== -1 && row[idx] !== undefined && row[idx] !== null && String(row[idx]).trim() !== '') {
+                    return String(row[idx]).trim();
+                }
+            }
+            return '';
+        };
+
+        // Populate outRow
+        for (let j = 0; j < outRow.length; j++) {
+           const tHeader = String(tplHeaders[j]);
+           if (!tHeader) continue;
+           
+           // Apply specific business rules based on Template Headers (smart transform)
+           if (tHeader.toLowerCase().includes('stt')) {
+               outRow[j] = sttCounter;
+               continue;
+           }
+
+           if (tHeader.toLowerCase().includes('thời hạn sử dụng còn lại')) {
+               let val = getRawVal(['Thời hạn sử dụng còn lại được chấp nhận (%)', 'Thời hạn sử dụng', 'Thời hạn sử dụng còn lại (%)', 'Thời hạn sử dụng còn lại'], tHeader);
+               if (val) {
+                   const numVal = Number(val);
+                   if (!isNaN(numVal) && numVal > 0 && numVal <= 1 && val !== '1') {
+                       val = String(numVal * 100) + '%';
+                   } else if (!val.includes('%') && !isNaN(numVal)) {
+                       val = val + '%';
+                   }
+                   outRow[j] = val;
+               }
+               continue;
+           }
+
+           if (tHeader.toLowerCase().includes('tổng thời hạn sử dụng')) {
+               let val = getRawVal(['Tổng thời hạn sử dụng', 'Thời hạn sử dụng', 'Thời gian bảo hành', 'Hạn sử dụng'], tHeader);
+               if (val) {
+                   const numVal = Number(val);
+                   if (!isNaN(numVal)) {
+                       val = String(numVal * 30);
+                   }
+                   outRow[j] = val;
+               }
+               continue;
+           }
+
+           if (tHeader.toLowerCase().includes('loại thời gian')) {
+               let tongThoiHan = getRawVal(['Tổng thời hạn sử dụng', 'Thời hạn sử dụng', 'Thời gian bảo hành', 'Hạn sử dụng']);
+               if (tongThoiHan) {
+                   outRow[j] = 'D';
+               }
+               continue;
+           }
+
+           if (tHeader.toLowerCase().includes('mã_tên thương hiệu') || tHeader.toLowerCase() === 'thương hiệu') {
+               const rawBrand = getRawVal(['Thương hiệu', 'Thương hiệu *', 'Brand', 'Mã_Tên thương hiệu *', 'Mã_Tên thương hiệu', 'Tên thương hiệu'], tHeader);
+               if (rawBrand) {
+                   const mapped = lookupInDictionary(rawBrand, tHeader);
+                   if (!mapped) hasMappingError = true;
+                   outRow[j] = mapped || rawBrand;
+                   tempLogs.push({ rowIndex: sttCounter, columnName: tHeader, rawValue: rawBrand, mappedValue: mapped, finalValue: outRow[j], hasError: !mapped });
+               }
+               continue;
+           }
+
+           if (tHeader.toLowerCase().includes('mã_tên đơn vị tính cơ sở') || tHeader.toLowerCase() === 'đơn vị tính') {
+               const rawUnit = getRawVal(['Đơn vị tính', 'ĐVT', 'Unit', 'Mã_Tên đơn vị tính cơ sở *', 'Mã_Tên đơn vị tính cơ sở', 'Tên đơn vị tính'], tHeader);
+               if (rawUnit) {
+                   const mapped = lookupInDictionary(rawUnit, tHeader);
+                   if (!mapped) hasMappingError = true;
+                   outRow[j] = mapped || rawUnit;
+                   tempLogs.push({ rowIndex: sttCounter, columnName: tHeader, rawValue: rawUnit, mappedValue: mapped, finalValue: outRow[j], hasError: !mapped });
+               }
+               continue;
+           }
+
+           if (tHeader.toLowerCase().includes('mã_tên ncc') || tHeader.toLowerCase().includes('nhà cung cấp') || tHeader.toLowerCase() === 'ncc') {
+               const rawNCC = getRawVal(['Danh sách Mã_Tên NCC *', 'Danh sách Mã_Tên NCC', 'Nhà cung cấp', 'NCC', 'Supplier', 'Mã_Tên NCC *', 'Mã_Tên NCC', 'Tên NCC'], tHeader);
+               if (rawNCC) {
+                   let mapped: string | null = null;
+                   const m1Matches = rawNCC.match(/M1\d{7}/g);
+                   
+                   if (m1Matches && m1Matches.length > 0) {
+                       const mappedParts = m1Matches.map(code => lookupInDictionary(code, tHeader) || code);
+                       mapped = mappedParts.join(', ');
+                   } else {
+                       const parts = rawNCC.split('-').map(p => p.trim()).filter(p => p);
+                       if (parts.length > 1) {
+                           const mappedParts = parts.map(p => lookupInDictionary(p, tHeader) || p);
+                           mapped = mappedParts.join(', ');
+                       } else {
+                           mapped = lookupInDictionary(rawNCC, tHeader);
+                       }
+                   }
+
+                   if (!mapped) hasMappingError = true;
+                   outRow[j] = mapped || rawNCC;
+                   tempLogs.push({ rowIndex: sttCounter, columnName: tHeader, rawValue: rawNCC, mappedValue: mapped, finalValue: outRow[j], hasError: !mapped });
+               }
+               continue;
+           }
+
+           if (tHeader.toLowerCase().includes('mã nhóm điểm bán_giá niêm yết_giá bán')) {
+               const combined = getRawVal(['Nhóm điểm bán - Giá NY - Giá bán*', 'Nhóm điểm bán - Giá NY - Giá bán', 'Mã nhóm điểm bán_Giá niêm yết_Giá bán *']);
+               if (combined) {
+                   outRow[j] = combined;
+                   continue;
+               }
+
+               const maNhom = getRawVal(['Mã nhóm điểm bán', 'POS Group', 'Mã nhóm', 'Mã điểm bán'], 'Mã nhóm điểm bán');
+               const giaNiemYet = getRawVal(['Giá niêm yết', 'Giá gốc', 'Original Price'], 'Giá niêm yết');
+               const giaBan = getRawVal(['Giá bán', 'Giá khuyến mãi', 'Sale Price', 'Price'], 'Giá bán');
+               if (giaNiemYet || giaBan || maNhom) {
+                   outRow[j] = `${maNhom || 'All'}_${giaNiemYet || '0'}_${giaBan || '0'}`;
+               }
+               continue;
+           }
+
+           if (tHeader.toLowerCase().includes('mô tả sản phẩm') || tHeader.toLowerCase() === 'mô tả') {
+               outRow[j] = ''; // Do nothing, keep it empty
+               continue;
+           }
+
+           if (tHeader.toLowerCase() === 'hành động') {
+               let hanhDong = getRawVal([tHeader, 'Hành động', 'Action']);
+               
+               if (hanhDong) {
+                   if (hanhDong.toLowerCase().includes('tạo mới') || hanhDong.toLowerCase().includes('cha')) {
+                       hanhDong = 'Tạo mới';
+                   } else if (hanhDong.toLowerCase().includes('biến thể') || hanhDong.toLowerCase().includes('bt')) {
+                       hanhDong = 'Biến thể';
+                   }
+               }
+               
+               if (!hanhDong) {
+                   // Fallback to checking Mã SP
+                   const maSP = getRawVal(['Mã SP', 'Mã sản phẩm', 'Product Code']);
+                   if (maSP && maSP.toUpperCase().includes('BT')) {
+                       hanhDong = 'Biến thể';
+                   } else if (maSP && (maSP.toUpperCase().includes('CHA') || maSP.toUpperCase().includes('DON'))) {
+                       hanhDong = 'Tạo mới';
+                   } else if (maSP && !outRow[j]) {
+                       hanhDong = 'Biến thể'; // Final fallback
+                   }
+               }
+               
+               if (hanhDong) {
+                   outRow[j] = hanhDong;
+               }
+               continue;
+           }
+           
+           if (tHeader.toLowerCase().includes('thuế') || tHeader.toLowerCase() === 'vat') {
+               let vat = getRawVal([tHeader, 'Thuế VAT', 'VAT', 'Thuế bán ra', 'Thuế bán ra *', 'Thuế nhập vào', 'VAT (%)', 'VAT (%) *']);
+               if (vat) {
+                   const numVal = Number(vat);
+                   if (!isNaN(numVal) && numVal > 0 && numVal <= 1 && vat !== '1') {
+                       vat = String(numVal * 100);
+                   } else if (vat.includes('%')) {
+                       vat = vat.replace('%', '');
+                   }
+                   outRow[j] = vat;
+               }
+               continue;
+           }
+
+           // General Deep Match
+           let val = '';
+           // 1. Check mapped source columns (AI Header Mapping)
+           const mappedSourceHeaders = Object.keys(headerMapping).filter(k => headerMapping[k] === tHeader);
+           if (mappedSourceHeaders.length > 0) {
+               for (const srcKey of mappedSourceHeaders) {
+                   const srcIdx = rawHeaders.findIndex(h => String(h).trim() === srcKey.trim());
+                   if (srcIdx !== -1 && row[srcIdx] !== undefined && row[srcIdx] !== null && String(row[srcIdx]).trim() !== '') {
+                       val = String(row[srcIdx]);
+                       break;
+                   }
+               }
+           } else {
+               // 2. Exact match
+               const srcIdx = rawHeaders.findIndex(h => String(h).trim().toLowerCase() === tHeader.toLowerCase());
+               if (srcIdx !== -1 && row[srcIdx] !== undefined && row[srcIdx] !== null && String(row[srcIdx]).trim() !== '') {
+                   val = String(row[srcIdx]);
+               }
+           }
+
+           if (val) {
+             let valueMappedByAI = false;
+             // Apply Value Rules from AI Deep Match
+             const applicableRules = valueRules.filter(r => r.targetColumn === tHeader);
+             for (const rule of applicableRules) {
+                 if (val.includes(rule.sourceValue) || val.toLowerCase() === rule.sourceValue.toLowerCase()) {
+                     val = rule.targetValue;
+                     valueMappedByAI = true;
+                     break;
+                 }
+             }
+
+             // 2. Apply dictionary lookup for text translation if not already mapped by AI
+             if (!valueMappedByAI) {
+                 const mappedVal = lookupInDictionary(val, tHeader);
+                 if (mappedVal) {
+                     val = mappedVal;
+                 }
+             }
+             
+             if (tHeader.includes('%')) {
+                 const numVal = Number(val);
+                 if (!isNaN(numVal) && numVal > 0 && numVal <= 1 && val !== '1') {
+                     val = String(numVal * 100) + '%';
+                 } else if (!isNaN(numVal) && !val.includes('%') && val !== '') {
+                     val = val + '%';
+                 }
+             }
+             
+             outRow[j] = val; // Overwrite default value if we found something
+           }
+        } // End for (j)
+        
+        sttCounter++;
+        outputData.push(outRow);
+        const addedRow = worksheet.addRow(outRow);
+        if (hasMappingError) {
+            addedRow.eachCell({ includeEmpty: true }, function(cell) {
+                cell.fill = {
+                    type: 'pattern',
+                    pattern: 'solid',
+                    fgColor: { argb: 'FFFFCCCC' } // Light red/pink
+                };
+            });
+        }
+      }
+
+      setMatchingLogs(tempLogs);
+      setWorkflowStatus('Hoàn thiện file đầu ra...');
+      // Generate output blob
+      const buffer = await workbook.xlsx.writeBuffer();
+      const outputBlob = new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheet.sheet' });
+      
+      const fileName = `chuanhoa_${workflowRawFile.name}`;
+
+      // Save to IDB & Firestore if authenticated
+      if (auth.currentUser) {
+        try {
+          const fileId = `workflow_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+          await idbSet(fileId, outputBlob);
+          
+          await addHistory(STORE_NAMES.CONVERSIONS, {
+            uid: auth.currentUser.uid,
+            userEmail: auth.currentUser.email || 'N/A',
+            fileName: workflowRawFile.name,
+            outputFileName: fileName,
+            rowCount: outputData.length - 1,
+            status: 'success',
+            fileId: fileId,
+            createdAt: Timestamp.now()
+          });
+        } catch (err) {
+          console.error('Lỗi khi lưu lịch sử workflow', err);
+        }
+      }
+
+      // Download
+      const url = URL.createObjectURL(outputBlob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = fileName;
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      setWorkflowSuccess(`Đã chuẩn hóa thành công ${outputData.length - 1} dòng dữ liệu.`);
+      toast.success(`Đã chuẩn hóa thành công ${outputData.length - 1} dòng dữ liệu.`);
+    } catch (err: any) {
+      console.error(err);
+      const errMsg = err.message || 'Có lỗi xảy ra trong quá trình chuẩn hóa dữ liệu.';
+      setWorkflowError(errMsg);
+      toast.error(errMsg);
+    } finally {
+      setIsWorkflowProcessing(false);
+    }
+  };
+
+  // --- State for "Clean" Tab ---
+  const [cleanFile, setCleanFile] = useState<File | null>(null);
+  const [cleanHeaders, setCleanHeaders] = useState<string[]>([]);
+  const [cleanPreview, setCleanPreview] = useState<any[][]>([]);
+  const [processedPreview, setProcessedPreview] = useState<any[][]>([]);
+  const [isCleaning, setIsCleaning] = useState<boolean>(false);
+  const [isPreviewLoading, setIsPreviewLoading] = useState<boolean>(false);
+  const [cleanError, setCleanError] = useState<string | null>(null);
+  const [cleanSuccess, setCleanSuccess] = useState<string | null>(null);
+  
+  // Cleaning Options
+  const [operations, setOperations] = useState<any[]>([]);
+  const [exportFormat, setExportFormat] = useState<'csv' | 'xlsx'>('csv');
+  const [savedMacros, setSavedMacros] = useState<{name: string, operations: any[]}[]>([]);
+  const [macroName, setMacroName] = useState('');
+
+  React.useEffect(() => {
+    const macros = localStorage.getItem('file_converter_macros');
+    if (macros) {
+      try {
+        setSavedMacros(JSON.parse(macros));
+      } catch (e) {
+        console.error(e);
+      }
+    }
+  }, []);
+
+  React.useEffect(() => {
+    if (cleanPreview.length === 0) {
+      setProcessedPreview([]);
+      return;
+    }
+    if (operations.length === 0) {
+      setProcessedPreview(cleanPreview);
+      return;
+    }
+
+    setIsPreviewLoading(true);
+    const worker = new Worker(new URL('../../workers/dataProcessorWorker.ts', import.meta.url), { type: 'module' });
+    
+    worker.onmessage = (e) => {
+      if (e.data.success && e.data.previewData) {
+        setProcessedPreview(e.data.previewData);
+      }
+      setIsPreviewLoading(false);
+      worker.terminate();
+    };
+
+    worker.onerror = () => {
+      setIsPreviewLoading(false);
+      worker.terminate();
+    };
+
+    worker.postMessage({
+      isPreview: true,
+      previewData: cleanPreview,
+      operations,
+    });
+
+    return () => {
+      worker.terminate();
+    };
+  }, [cleanPreview, operations]);
+
+  const getAvailableHeaders = (index: number) => {
+    let currentHeaders = [...cleanHeaders];
+    for (let i = 0; i < index; i++) {
+      const op = operations[i];
+      if (op.type === 'add_column' && op.columnName) {
+        currentHeaders.push(op.columnName);
+      } else if (op.type === 'extract_text' && op.newColumnName) {
+        currentHeaders.push(op.newColumnName);
+      } else if (op.type === 'remove_columns' && op.columns) {
+        currentHeaders = currentHeaders.filter(h => !op.columns.includes(h));
+      }
+    }
+    return currentHeaders;
+  };
+
+  const saveMacro = () => {
+    if (!macroName.trim() || operations.length === 0) return;
+    const newMacros = [...savedMacros, { name: macroName, operations }];
+    setSavedMacros(newMacros);
+    localStorage.setItem('file_converter_macros', JSON.stringify(newMacros));
+    setMacroName('');
+  };
+
+  const loadMacro = (macro: {name: string, operations: any[]}) => {
+    setOperations(macro.operations);
+  };
+
+  const deleteMacro = (index: number) => {
+    const newMacros = savedMacros.filter((_, i) => i !== index);
+    setSavedMacros(newMacros);
+    localStorage.setItem('file_converter_macros', JSON.stringify(newMacros));
+  };
+
+  const addOperation = (type: string) => {
+    const newOp: any = { id: Date.now(), type, columns: [] };
+    if (type === 'extract_text') {
+      newOp.sourceColumn = '';
+      newOp.newColumnName = '';
+      newOp.method = 'left';
+      newOp.param1 = '';
+    } else if (type === 'add_column') {
+      newOp.columnName = '';
+      newOp.defaultValue = '';
+    } else if (type === 'text_standardization') {
+      newOp.method = 'lowercase';
+    }
+    setOperations([...operations, newOp]);
+  };
+
+  const updateOperation = (id: number, updates: any) => {
+    setOperations(operations.map(op => op.id === id ? { ...op, ...updates } : op));
+  };
+
+  const removeOperation = (id: number) => {
+    setOperations(operations.filter(op => op.id !== id));
+  };
+
+  // --- State for "Merge" Tab (Old Feature) ---
+  const [sourceFile, setSourceFile] = useState<File | null>(null);
+  const [templateFile, setTemplateFile] = useState<File | null>(null);
+  const [isMerging, setIsMerging] = useState<boolean>(false);
+  const [mergeError, setMergeError] = useState<string | null>(null);
+  const [processedData, setProcessedData] = useState<any[][] | null>(null);
+  const [sourceHeaders, setSourceHeaders] = useState<string[]>([]);
+  const [templateHeaders, setTemplateHeaders] = useState<string[]>([]);
+  const [sourceKeyColumn, setSourceKeyColumn] = useState('');
+  const [templateKeyColumn, setTemplateKeyColumn] = useState('');
+  const [startRow, setStartRow] = useState('2');
+  const [mappings, setMappings] = useState<MappingRule[]>([
+    { id: Date.now(), source: '', destination: '' }
+  ]);
+
+  // --- Shared Functions ---
+  const readFile = (file: File, headerRowIndex: number, previewRows?: number): Promise<{ data: any[][], headers: string[] }> => {
+    return new Promise((resolve, reject) => {
+      const isCSV = file.name.toLowerCase().endsWith('.csv');
+
+      const processHeaders = (rawRow: any[]) => {
+        const rawHeaders = rawRow.map(String).map(s => s.trim());
+        const seen = new Map<string, number>();
+        return rawHeaders.map((h, i) => {
+            let baseName = h ? h : `Column ${i + 1}`;
+            if (seen.has(baseName)) {
+                const count = seen.get(baseName)! + 1;
+                seen.set(baseName, count);
+                return `${baseName} (${count})`;
+            } else {
+                seen.set(baseName, 1);
+                return baseName;
+            }
+        });
+      };
+      
+      if (isCSV) {
+        Papa.parse(file, {
+          preview: previewRows ? previewRows + headerRowIndex + 1 : 0,
+          skipEmptyLines: false,
+          complete: (results) => {
+            const aoa = results.data as any[][];
+            if (aoa.length <= headerRowIndex) return reject(new Error("Không tìm thấy dòng tiêu đề."));
+            const headers = processHeaders(aoa[headerRowIndex]);
+            resolve({ data: aoa, headers });
+          },
+          error: (err) => reject(err)
+        });
+      } else {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+          try {
+            if (!e.target?.result) return reject(new Error("File is empty or unreadable."));
+            const data = new Uint8Array(e.target.result as ArrayBuffer);
+            const workbook = XLSX.read(data, { type: 'array', cellStyles: false, cellDates: false, sheetRows: previewRows ? previewRows + headerRowIndex + 1 : undefined });
+            if (!workbook.SheetNames || workbook.SheetNames.length === 0) return reject(new Error("No sheets found."));
+            const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+            const aoa = XLSX.utils.sheet_to_json(worksheet, { header: 1, defval: "" }) as any[][];
+            if (headerRowIndex < 0 || headerRowIndex >= aoa.length) return reject(new Error(`"Dòng bắt đầu" không hợp lệ.`));
+            const headers = processHeaders(aoa[headerRowIndex]);
+            resolve({ data: aoa, headers });
+          } catch (err) {
+            reject(new Error("Failed to parse the file."));
+          }
+        };
+        reader.onerror = (err) => reject(err);
+        reader.readAsArrayBuffer(file);
+      }
+    });
+  };
+
+  // --- Clean Tab Functions ---
+  const handleCleanFileChange = async (file: File) => {
+    setCleanFile(file);
+    setCleanError(null);
+    setCleanSuccess(null);
+    try {
+      // Read first 50 rows for preview
+      const { data, headers } = await readFile(file, 0, 50);
+      setCleanHeaders(headers);
+      setCleanPreview(data.slice(0, 50));
+    } catch (err) {
+      setCleanError(err instanceof Error ? err.message : 'Lỗi đọc file.');
+      setCleanHeaders([]);
+      setCleanPreview([]);
+    }
+  };
+
+  const handleProcessClean = async () => {
+    if (!cleanFile) return;
+    setIsCleaning(true);
+    setCleanError(null);
+    setCleanSuccess(null);
+
+    try {
+      const isCSV = cleanFile.name.toLowerCase().endsWith('.csv');
+      const fileData = await cleanFile.arrayBuffer();
+      
+      const worker = new Worker(new URL('../../workers/dataProcessorWorker.ts', import.meta.url), { type: 'module' });
+      
+      worker.onmessage = async (e) => {
+        const { success, blob, fileName, error, originalRowCount, finalRowCount } = e.data;
+        if (success) {
+          try {
+            // Initiate Download
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = fileName;
+            document.body.appendChild(a);
+            a.click();
+            URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+            
+            // Save to IDB & Firestore if authenticated
+            if (auth.currentUser) {
+              const fileId = `conversion_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+              await idbSet(fileId, blob);
+              
+              await addHistory(STORE_NAMES.CONVERSIONS, {
+                uid: auth.currentUser.uid,
+                userEmail: auth.currentUser.email || 'N/A',
+                fileName: cleanFile.name,
+                outputFileName: fileName,
+                rowCount: finalRowCount,
+                status: 'success',
+                fileId: fileId,
+                createdAt: Timestamp.now()
+              });
+            }
+
+            const successMsg = `Đã xử lý thành công! Dữ liệu giảm từ ${originalRowCount} xuống ${finalRowCount} dòng.`;
+            setCleanSuccess(successMsg);
+            toast.success(successMsg);
+          } catch (err) {
+            console.error(err);
+            setCleanError('Lỗi khi lưu lịch sử. Vui lòng tải lại trang.');
+            toast.error('Lỗi khi lưu lịch sử.');
+          }
+        } else {
+          setCleanError(error);
+          toast.error(error || 'Có lỗi xảy ra.');
+        }
+        setIsCleaning(false);
+        worker.terminate();
+      };
+
+      worker.onerror = (err) => {
+        setCleanError("Lỗi hệ thống khi xử lý dữ liệu lớn.");
+        toast.error("Lỗi hệ thống khi xử lý dữ liệu lớn.");
+        setIsCleaning(false);
+        worker.terminate();
+      };
+
+      worker.postMessage({
+        fileData,
+        isCSV,
+        fileName: cleanFile.name,
+        operations,
+        exportFormat
+      });
+
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : 'Lỗi không xác định.';
+      setCleanError(errMsg);
+      toast.error(errMsg);
+      setIsCleaning(false);
+    }
+  };
+
+  // --- Merge Tab Functions ---
+  const processMergeFile = async (file: File, setHeaders: (headers: string[]) => void, setFile: (file: File) => void) => {
+      const startRowNumber = parseInt(startRow, 10);
+      if(isNaN(startRowNumber) || startRowNumber < 1) {
+          setMergeError("Dòng bắt đầu phải là một số hợp lệ lớn hơn 0.");
+          return;
+      }
+      try {
+        setMergeError(null);
+        setProcessedData(null);
+        const { headers } = await readFile(file, startRowNumber - 2);
+        setHeaders(headers);
+        setFile(file);
+      } catch(err) {
+        setMergeError(`Lỗi đọc file "${file.name}": ${err instanceof Error ? err.message : 'Lỗi không xác định.'}`);
+        setHeaders([]);
+      }
+  };
+
+  const handleConvert = useCallback(async () => {
+    if (!sourceFile || !templateFile) {
+      setMergeError('Vui lòng tải lên cả file nguồn và file đích.');
+      return;
+    }
+
+    setIsMerging(true);
+    setMergeError(null);
+    setProcessedData(null);
+
+    try {
+      const finalMappings = mappings.filter(m => m.source && m.destination);
+      if (!sourceKeyColumn || !templateKeyColumn) throw new Error("Vui lòng chọn đủ Cột Khóa cho cả hai file.");
+      if (finalMappings.length === 0) throw new Error("Vui lòng thiết lập ít nhất một quy tắc ánh xạ cột.");
+      
+      const startRowNumber = parseInt(startRow, 10);
+      const headerRowIndex = startRowNumber - 2;
+      
+      const { data: sourceData, headers: currentSourceHeaders } = await readFile(sourceFile, headerRowIndex);
+      const { data: templateData, headers: currentTemplateHeaders } = await readFile(templateFile, headerRowIndex);
+      
+      if (!currentSourceHeaders.includes(sourceKeyColumn)) throw new Error(`Không tìm thấy Cột Khóa '${sourceKeyColumn}' trong file dữ liệu.`);
+      if (!currentTemplateHeaders.includes(templateKeyColumn)) throw new Error(`Không tìm thấy Cột Khóa '${templateKeyColumn}' trong file đích.`);
+      
+      for (const map of finalMappings) {
+          if (!currentSourceHeaders.includes(map.source)) throw new Error(`Lỗi ánh xạ: Cột nguồn '${map.source}' không tồn tại.`);
+          if (!currentTemplateHeaders.includes(map.destination)) throw new Error(`Lỗi ánh xạ: Cột đích '${map.destination}' không tồn tại.`);
+      }
+      
+      const sourceKeyIndex = currentSourceHeaders.indexOf(sourceKeyColumn);
+      const sourceMap = new Map<string, any[]>();
+      for (let i = startRowNumber - 1; i < sourceData.length; i++) {
+        const row = sourceData[i];
+        const key = String(row[sourceKeyIndex]).trim();
+        if (key) sourceMap.set(key, row);
+      }
+
+      const templateKeyIndex = currentTemplateHeaders.indexOf(templateKeyColumn);
+      const updatedTemplateData = templateData.map((row, index) => {
+        if (index < startRowNumber - 1) return row; 
+        const key = String(row[templateKeyIndex]).trim();
+        const sourceRow = sourceMap.get(key);
+        if (sourceRow) {
+          const newRow = [...row];
+          finalMappings.forEach((map) => {
+            const sourceIndex = currentSourceHeaders.indexOf(map.source);
+            const destIndex = currentTemplateHeaders.indexOf(map.destination);
+            if(sourceIndex === -1 || destIndex === -1) return;
+            if(newRow.length <= destIndex) {
+               for(let i=newRow.length; i<=destIndex; i++) newRow.push("");
+            }
+            newRow[destIndex] = sourceRow[sourceIndex];
+          });
+          return newRow;
+        }
+        return row;
+      });
+      
+      setProcessedData(updatedTemplateData);
+      toast.success('Chuyển đổi file thành công!');
+    } catch (err) {
+      const errMsg = `Lỗi xử lý: ${err instanceof Error ? err.message : 'Đã xảy ra lỗi không xác định.'}`;
+      setMergeError(errMsg);
+      toast.error(errMsg);
+    } finally {
+      setIsMerging(false);
+    }
+  }, [sourceFile, templateFile, sourceKeyColumn, templateKeyColumn, startRow, mappings]);
+
+  const handleDownloadMerge = (format: 'xlsx' | 'csv') => {
+    if (!processedData || !templateFile) return;
+    try {
+        const newWorksheet = XLSX.utils.aoa_to_sheet(processedData);
+        let blob: Blob;
+        if (format === 'xlsx') {
+            const newWorkbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(newWorkbook, newWorksheet, 'Sheet1');
+            const output = XLSX.write(newWorkbook, { bookType: 'xlsx', type: 'array' });
+            blob = new Blob([output], { type: 'application/vnd.openxmlformats-officedocument.spreadsheet.sheet' });
+        } else {
+            const csvOutput = XLSX.utils.sheet_to_csv(newWorksheet);
+            blob = new Blob(['\uFEFF' + csvOutput], { type: 'text/csv;charset=utf-8;' });
+        }
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        const baseName = templateFile.name.split('.').slice(0, -1).join('.') || 'file';
+        a.download = `ket_qua_${baseName}.${format}`;
+        document.body.appendChild(a);
+        a.click();
+        URL.revokeObjectURL(url);
+        document.body.removeChild(a);
+        toast.success(`Xuất file ${format.toUpperCase()} thành công!`);
+    } catch (err) {
+        const errMsg = `Lỗi xuất file: ${err instanceof Error ? err.message : 'Lỗi không xác định.'}`;
+        setMergeError(errMsg);
+        toast.error(errMsg);
+    }
+  };
+
+  // --- State for "History" Tab ---
+  const [historyList, setHistoryList] = useState<any[]>([]);
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false);
+
+  useEffect(() => {
+    if (activeSubTab === 'history') {
+      setIsLoadingHistory(true);
+      const loadData = async () => {
+          try {
+              let results = await listHistory(STORE_NAMES.CONVERSIONS, 50);
+              if (auth.currentUser?.email !== 'tungnguyen.0612993@gmail.com') {
+                  results = results.filter((item: any) => item.uid === auth.currentUser?.uid);
+              }
+              setHistoryList(results);
+          } catch (err) {
+              console.error("Error loading history:", err);
+          } finally {
+              setIsLoadingHistory(false);
+          }
+      };
+
+      loadData();
+      const unsubscribe = subscribeToStore(STORE_NAMES.CONVERSIONS, loadData);
+      return () => unsubscribe();
+    }
+  }, [activeSubTab, auth.currentUser]);
+
+  const handleDownloadHistoricalFile = async (fileId: string, outputFileName: string) => {
+    try {
+      const blob = await idbGet<Blob>(fileId);
+      if (!blob) {
+        alert("File không tồn tại trên thiết bị này (Có thể đã bị xóa khỏi thiết bị nội bộ hoặc do đổi trình duyệt).");
+        return;
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = outputFileName;
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch (err) {
+      console.error("Download historical error:", err);
+      alert("Đã xảy ra lỗi khi tải lại file.");
+    }
+  };
+
+  return (
+    <div className="space-y-6 animate-fade-in">
+      {/* Tab Navigation */}
+      <div className="flex space-x-2 border-b border-zinc-700 pb-2">
+        <button
+          onClick={() => setActiveSubTab('clean')}
+          className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
+            activeSubTab === 'clean' ? 'bg-zinc-800 text-sky-400 border-t border-l border-r border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          <Settings className="w-4 h-4 inline-block mr-2" />
+          Xử lý Dữ liệu Lớn (Clean/Sync)
+        </button>
+        <button
+          onClick={() => setActiveSubTab('merge')}
+          className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
+            activeSubTab === 'merge' ? 'bg-zinc-800 text-sky-400 border-t border-l border-r border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          <RefreshCw className="w-4 h-4 inline-block mr-2" />
+          Nối Dữ liệu (Tính năng cũ)
+        </button>
+        <button
+          onClick={() => setActiveSubTab('workflow')}
+          className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
+            activeSubTab === 'workflow' ? 'bg-zinc-800 text-sky-400 border-t border-l border-r border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          <Database className="w-4 h-4 inline-block mr-2" />
+          Tự động Chuẩn hóa (Theo Từ điển)
+        </button>
+        <button
+          onClick={() => setActiveSubTab('history')}
+          className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors ${
+            activeSubTab === 'history' ? 'bg-zinc-800 text-sky-400 border-t border-l border-r border-zinc-700' : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          <FileSpreadsheet className="w-4 h-4 inline-block mr-2" />
+          Lịch sử Chuyển đổi
+        </button>
+      </div>
+
+      {/* Clean Tab Content */}
+      {activeSubTab === 'clean' && (
+        <div className="flex flex-col h-[calc(100vh-12rem)] gap-6">
+          {/* Top Bar: Upload & Macro Selection */}
+          <div className="flex flex-col md:flex-row gap-4 bg-zinc-800/40 p-4 rounded-2xl border border-zinc-700/50 shrink-0">
+            <div className="flex-1">
+              <FileInput 
+                id="clean-file" 
+                label="Tải lên File Excel/CSV (Hỗ trợ file >20MB)" 
+                file={cleanFile} 
+                onFileChange={handleCleanFileChange} 
+                onClear={() => { setCleanFile(null); setCleanHeaders([]); setCleanPreview([]); setOperations([]); }} 
+              />
+            </div>
+            
+            {cleanFile && (
+              <div className="w-full md:w-72 flex flex-col justify-end space-y-3">
+                <div className="bg-zinc-900/50 p-3 rounded-xl border border-zinc-700/50">
+                  <label className="text-xs font-medium text-zinc-400 block mb-2 uppercase tracking-wider">Macro đã lưu</label>
+                  <select
+                    onChange={(e) => {
+                      const macro = savedMacros[Number(e.target.value)];
+                      if (macro) loadMacro(macro);
+                      e.target.value = "";
+                    }}
+                    className="w-full bg-zinc-800 border border-zinc-600 rounded-lg py-2 px-3 text-zinc-200 text-sm focus:ring-2 focus:ring-sky-500 transition-all outline-none"
+                    disabled={savedMacros.length === 0}
+                  >
+                    <option value="">{savedMacros.length > 0 ? '-- Chọn Macro để áp dụng --' : 'Chưa có Macro nào'}</option>
+                    {savedMacros.map((m, i) => (
+                      <option key={i} value={i}>{m.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Main Content: Pipeline & Preview */}
+          {cleanFile && (
+            <div className="flex flex-col lg:flex-row gap-6 flex-1 min-h-0">
+              
+              {/* Left Column: Operations Pipeline */}
+              <div className="w-full lg:w-1/3 flex flex-col bg-zinc-800/40 rounded-2xl border border-zinc-700/50 overflow-hidden">
+                <div className="p-4 border-b border-zinc-700/50 bg-zinc-800/80 flex items-center justify-between shrink-0">
+                  <h3 className="font-bold text-sky-400 flex items-center gap-2">
+                    <Settings className="w-5 h-5" />
+                    Quy trình Xử lý
+                  </h3>
+                  <span className="text-xs font-medium bg-sky-500/20 text-sky-300 px-2 py-1 rounded-full">
+                    {operations.length} bước
+                  </span>
+                </div>
+                
+                <div className="flex-1 overflow-y-auto p-4 space-y-4 custom-scrollbar">
+                  {operations.length === 0 ? (
+                    <div className="text-center py-8 text-zinc-500 text-sm border-2 border-dashed border-zinc-700/50 rounded-xl">
+                      Chưa có bước xử lý nào.<br/>Hãy thêm bước mới ở bên dưới.
+                    </div>
+                  ) : (
+                    <div className="space-y-3 relative before:absolute before:inset-0 before:ml-[1.1rem] before:w-0.5 before:bg-zinc-700/50 before:z-0">
+                      {operations.map((op, index) => {
+                        const availableHeaders = getAvailableHeaders(index);
+                        const config = getOperationConfig(op.type);
+                        const Icon = config.icon;
+                        return (
+                        <div key={op.id} className="relative z-10 pl-10">
+                          {/* Step Number Circle */}
+                          <div className={`absolute left-0 top-3 w-8 h-8 rounded-full ${config.bg} border ${config.border} flex items-center justify-center ${config.color} font-bold text-xs shadow-lg`}>
+                            {index + 1}
+                          </div>
+                          
+                          <div className={`bg-zinc-900/80 p-4 rounded-xl border border-zinc-700/80 shadow-sm group hover:border-${config.color.split('-')[1]}-500/50 transition-colors`}>
+                            <div className="flex items-start justify-between mb-3">
+                              <div className="flex items-center gap-2">
+                                <div className={`p-1.5 rounded-md ${config.bg} ${config.color}`}>
+                                  <Icon className="w-4 h-4" />
+                                </div>
+                                <div className="font-semibold text-zinc-200 text-sm">
+                                  {config.label}
+                                </div>
+                              </div>
+                              <button onClick={() => removeOperation(op.id)} className="text-zinc-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 bg-zinc-800 rounded-md hover:bg-red-500/10">
+                                <Trash2 className="w-4 h-4" />
+                              </button>
+                            </div>
+                            
+                            {/* Operation specific inputs */}
+                            {['remove_empty_rows', 'trim_whitespace', 'remove_duplicates', 'remove_columns', 'convert_to_png'].includes(op.type) && (
+                              <div className="text-xs text-zinc-400">
+                                <div className="mb-1.5">{op.type === 'remove_columns' ? 'Chọn các cột cần xóa:' : 'Áp dụng cho cột (để trống = tất cả):'}</div>
+                                <div className="flex flex-wrap gap-1.5">
+                                  {availableHeaders.map(h => (
+                                    <label key={h} className={`flex items-center space-x-1.5 px-2 py-1 rounded-md border cursor-pointer transition-colors ${op.columns?.includes(h) ? 'bg-sky-500/10 border-sky-500/50 text-sky-300' : 'bg-zinc-800 border-zinc-700 hover:border-zinc-500'}`}>
+                                      <input 
+                                        type="checkbox" 
+                                        checked={op.columns?.includes(h)}
+                                        onChange={(e) => {
+                                          const newCols = e.target.checked 
+                                            ? [...(op.columns || []), h]
+                                            : (op.columns || []).filter((c: string) => c !== h);
+                                          updateOperation(op.id, { columns: newCols });
+                                        }}
+                                        className="hidden"
+                                      />
+                                      <span className="truncate max-w-[120px]" title={h}>{h}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+
+                            {op.type === 'fill_down' && (
+                              <div className="space-y-3 text-xs text-zinc-400">
+                                <SelectInput 
+                                  label="Cột phân nhóm (Reset khi có giá trị mới):" 
+                                  options={availableHeaders} 
+                                  value={op.conditionColumn || ''} 
+                                  onChange={e => updateOperation(op.id, { conditionColumn: e.target.value })} 
+                                />
+                                <div>
+                                  <div className="mb-1.5">Áp dụng cho cột (để trống = tất cả):</div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {availableHeaders.map(h => (
+                                      <label key={h} className={`flex items-center space-x-1.5 px-2 py-1 rounded-md border cursor-pointer transition-colors ${op.columns?.includes(h) ? 'bg-sky-500/10 border-sky-500/50 text-sky-300' : 'bg-zinc-800 border-zinc-700 hover:border-zinc-500'}`}>
+                                        <input 
+                                          type="checkbox" 
+                                          checked={op.columns?.includes(h)}
+                                          onChange={(e) => {
+                                            const newCols = e.target.checked 
+                                              ? [...(op.columns || []), h]
+                                              : (op.columns || []).filter((c: string) => c !== h);
+                                            updateOperation(op.id, { columns: newCols });
+                                          }}
+                                          className="hidden"
+                                        />
+                                        <span className="truncate max-w-[120px]" title={h}>{h}</span>
+                                      </label>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {op.type === 'text_standardization' && (
+                              <div className="space-y-3">
+                                <select 
+                                  value={op.method} 
+                                  onChange={e => updateOperation(op.id, { method: e.target.value })}
+                                  className="w-full bg-zinc-800 border border-zinc-600 rounded-lg py-1.5 px-3 text-zinc-200 text-xs focus:ring-2 focus:ring-sky-500 outline-none"
+                                >
+                                  <option value="lowercase">chữ thường (lowercase)</option>
+                                  <option value="uppercase">CHỮ HOA (UPPERCASE)</option>
+                                  <option value="titlecase">Viết Hoa Chữ Cái Đầu (Title Case)</option>
+                                </select>
+                                <div className="text-xs text-zinc-400">
+                                  <div className="mb-1.5">Áp dụng cho cột (để trống = tất cả):</div>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {availableHeaders.map(h => (
+                                      <label key={h} className={`flex items-center space-x-1.5 px-2 py-1 rounded-md border cursor-pointer transition-colors ${op.columns?.includes(h) ? 'bg-sky-500/10 border-sky-500/50 text-sky-300' : 'bg-zinc-800 border-zinc-700 hover:border-zinc-500'}`}>
+                                        <input 
+                                          type="checkbox" 
+                                          checked={op.columns?.includes(h)}
+                                          onChange={(e) => {
+                                            const newCols = e.target.checked 
+                                              ? [...(op.columns || []), h]
+                                              : (op.columns || []).filter((c: string) => c !== h);
+                                            updateOperation(op.id, { columns: newCols });
+                                          }}
+                                          className="hidden"
+                                        />
+                                        <span className="truncate max-w-[120px]" title={h}>{h}</span>
+                                      </label>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            )}
+
+                            {op.type === 'extract_text' && (
+                              <div className="space-y-3 text-xs">
+                                <SelectInput 
+                                  label="Cột nguồn" 
+                                  options={availableHeaders} 
+                                  value={op.sourceColumn} 
+                                  onChange={e => updateOperation(op.id, { sourceColumn: e.target.value })} 
+                                />
+                                <input 
+                                  type="text" 
+                                  placeholder="Tên cột mới" 
+                                  value={op.newColumnName} 
+                                  onChange={e => updateOperation(op.id, { newColumnName: e.target.value })}
+                                  className="w-full bg-zinc-800 border border-zinc-600 rounded-lg py-1.5 px-3 text-zinc-200 focus:ring-2 focus:ring-sky-500 outline-none"
+                                />
+                                <select 
+                                  value={op.method} 
+                                  onChange={e => updateOperation(op.id, { method: e.target.value })}
+                                  className="w-full bg-zinc-800 border border-zinc-600 rounded-lg py-1.5 px-3 text-zinc-200 focus:ring-2 focus:ring-sky-500 outline-none"
+                                >
+                                  <option value="left">Lấy N ký tự bên trái</option>
+                                  <option value="right">Lấy N ký tự bên phải</option>
+                                  <option value="split">Tách chuỗi (Split)</option>
+                                </select>
+                                {op.method === 'split' ? (
+                                  <div className="flex gap-2">
+                                    <input type="text" placeholder="Ký tự phân cách (VD: -)" value={op.param1} onChange={e => updateOperation(op.id, { param1: e.target.value })} className="flex-1 bg-zinc-800 border border-zinc-600 rounded-lg py-1.5 px-3 text-zinc-200 outline-none focus:ring-2 focus:ring-sky-500" />
+                                    <input type="number" placeholder="Lấy phần thứ (0, 1...)" value={op.param2} onChange={e => updateOperation(op.id, { param2: e.target.value })} className="flex-1 bg-zinc-800 border border-zinc-600 rounded-lg py-1.5 px-3 text-zinc-200 outline-none focus:ring-2 focus:ring-sky-500" />
+                                  </div>
+                                ) : (
+                                  <input type="number" placeholder="Số ký tự (N)" value={op.param1} onChange={e => updateOperation(op.id, { param1: e.target.value })} className="w-full bg-zinc-800 border border-zinc-600 rounded-lg py-1.5 px-3 text-zinc-200 outline-none focus:ring-2 focus:ring-sky-500" />
+                                )}
+                              </div>
+                            )}
+
+                            {op.type === 'add_column' && (
+                              <div className="space-y-3 text-xs">
+                                <input 
+                                  type="text" 
+                                  placeholder="Tên cột mới" 
+                                  value={op.columnName} 
+                                  onChange={e => updateOperation(op.id, { columnName: e.target.value })}
+                                  className="w-full bg-zinc-800 border border-zinc-600 rounded-lg py-1.5 px-3 text-zinc-200 focus:ring-2 focus:ring-sky-500 outline-none"
+                                />
+                                <input 
+                                  type="text" 
+                                  placeholder="Giá trị mặc định" 
+                                  value={op.defaultValue} 
+                                  onChange={e => updateOperation(op.id, { defaultValue: e.target.value })}
+                                  className="w-full bg-zinc-800 border border-zinc-600 rounded-lg py-1.5 px-3 text-zinc-200 focus:ring-2 focus:ring-sky-500 outline-none"
+                                />
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        )
+                      })}
+                    </div>
+                  )}
+                </div>
+
+                {/* Add Operation & Save Macro Footer */}
+                <div className="p-4 border-t border-zinc-700/50 bg-zinc-800/80 space-y-3 shrink-0">
+                  <div className="flex gap-2">
+                    <select 
+                      id="add-op-select"
+                      className="flex-1 bg-zinc-900 border border-zinc-600 rounded-lg py-2 px-3 text-zinc-200 text-sm focus:ring-2 focus:ring-sky-500 outline-none"
+                    >
+                      <option value="">-- Thêm bước xử lý --</option>
+                      <option value="remove_empty_rows">Xóa dòng trống</option>
+                      <option value="trim_whitespace">Xóa khoảng trắng thừa</option>
+                      <option value="remove_duplicates">Xóa dòng trùng lặp</option>
+                      <option value="text_standardization">Chuẩn hóa văn bản</option>
+                      <option value="fill_down">Điền dữ liệu xuống dưới (Fill down)</option>
+                      <option value="extract_text">Trích xuất văn bản</option>
+                      <option value="add_column">Thêm cột mới</option>
+                      <option value="remove_columns">Xóa cột</option>
+                      <option value="convert_to_png">Chuyển đuôi file sang PNG</option>
+                    </select>
+                    <Button 
+                      onClick={() => {
+                        const select = document.getElementById('add-op-select') as HTMLSelectElement;
+                        if (select.value) {
+                          addOperation(select.value);
+                          select.value = '';
+                        }
+                      }}
+                      colorScheme="sky"
+                      className="!w-auto !px-4 shadow-lg shadow-sky-500/20"
+                    >
+                      <Plus className="w-5 h-5" />
+                    </Button>
+                  </div>
+
+                  {operations.length > 0 && (
+                    <div className="flex gap-2 pt-2 border-t border-zinc-700/50">
+                      <input 
+                        type="text" 
+                        placeholder="Tên Macro để lưu..." 
+                        value={macroName}
+                        onChange={e => setMacroName(e.target.value)}
+                        className="flex-1 bg-zinc-900 border border-zinc-600 rounded-lg py-2 px-3 text-zinc-200 text-sm focus:ring-2 focus:ring-sky-500 outline-none"
+                      />
+                      <Button onClick={saveMacro} disabled={!macroName.trim()} colorScheme="slate" className="!w-auto !px-4 text-xs whitespace-nowrap">
+                        Lưu Macro
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Right Column: Preview & Export */}
+              <div className="w-full lg:w-2/3 flex flex-col bg-zinc-800/40 rounded-2xl border border-zinc-700/50 overflow-hidden relative">
+                <div className="p-4 border-b border-zinc-700/50 bg-zinc-800/80 flex items-center justify-between shrink-0">
+                  <h3 className="font-bold text-sky-400">Xem trước Dữ liệu (50 dòng đầu)</h3>
+                  <div className="flex items-center gap-3">
+                    <select 
+                      value={exportFormat} 
+                      onChange={e => setExportFormat(e.target.value as any)}
+                      className="bg-zinc-900 border border-zinc-600 rounded-lg py-1.5 px-3 text-zinc-200 text-sm focus:ring-2 focus:ring-sky-500 outline-none"
+                    >
+                      <option value="csv">Xuất CSV</option>
+                      <option value="xlsx">Xuất Excel</option>
+                    </select>
+                    <Button onClick={handleProcessClean} disabled={isCleaning || !cleanFile} colorScheme="sky" className="py-1.5 px-4 text-sm shadow-lg shadow-sky-500/20">
+                      {isCleaning ? <><Spinner className="w-4 h-4 mr-2" /> Đang xử lý...</> : 'Xử lý & Tải xuống'}
+                    </Button>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-hidden relative bg-[#1a1a1a]">
+                  {isPreviewLoading && (
+                    <div className="absolute inset-0 z-20 bg-zinc-900/60 flex items-center justify-center backdrop-blur-sm">
+                      <div className="bg-zinc-800 p-4 rounded-xl border border-zinc-700 flex items-center shadow-xl">
+                        <Spinner className="w-5 h-5 text-sky-500" />
+                        <span className="ml-3 text-zinc-200 font-medium">Đang cập nhật xem trước...</span>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {processedPreview.length > 0 ? (
+                    <div className="h-full overflow-auto custom-scrollbar">
+                      <table className="min-w-full text-sm text-left border-collapse">
+                        <thead className="text-[10px] text-zinc-400 uppercase tracking-wider bg-zinc-900/95 sticky top-0 z-10 shadow-sm backdrop-blur-md">
+                          <tr>
+                            <th className="px-3 py-3 border-b border-zinc-800 font-semibold w-12 text-center">#</th>
+                            {processedPreview[0].map((header, i) => (
+                              <th key={i} className="px-4 py-3 border-b border-zinc-800 font-semibold whitespace-nowrap">
+                                {header}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="font-mono text-[11px] text-zinc-300">
+                          {processedPreview.slice(1).map((row, rowIndex) => (
+                            <tr key={rowIndex} className="border-b border-zinc-800/50 hover:bg-zinc-800/50 transition-colors group">
+                              <td className="px-3 py-2 text-center text-zinc-600 bg-zinc-900/20 group-hover:bg-transparent transition-colors">
+                                {rowIndex + 1}
+                              </td>
+                              {processedPreview[0].map((_, colIndex) => (
+                                <td key={colIndex} className="px-4 py-2 whitespace-nowrap max-w-[250px] truncate" title={String(row[colIndex] || '')}>
+                                  {row[colIndex] !== null && row[colIndex] !== undefined && row[colIndex] !== '' ? (
+                                    String(row[colIndex])
+                                  ) : (
+                                    <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-medium bg-zinc-800 text-zinc-500">null</span>
+                                  )}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-zinc-500">
+                      <Database className="w-12 h-12 mb-4 opacity-20" />
+                      <p className="text-sm font-medium">Dữ liệu xem trước sẽ hiển thị ở đây</p>
+                    </div>
+                  )}
+                </div>
+                
+                {/* Status Messages */}
+                {(cleanError || cleanSuccess) && (
+                  <div className={`p-3 text-sm border-t ${cleanError ? 'bg-red-500/10 border-red-500/20 text-red-400' : 'bg-green-500/10 border-green-500/20 text-green-400'}`}>
+                    {cleanError || cleanSuccess}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Merge Tab Content (Old Feature) */}
+      {activeSubTab === 'merge' && (
+        <div className="flex flex-col lg:flex-row gap-6">
+          <div className="w-full lg:w-2/3 space-y-6">
+            <div className="bg-zinc-800/50 p-6 sm:p-8 rounded-2xl border border-zinc-700 space-y-6">
+              <h2 className="text-xl font-bold text-sky-300">Thiết lập Chuyển đổi</h2>
+              <FileInput id="source-file" label="1. Tải lên File Dữ liệu (Nguồn tra cứu)" file={sourceFile} onFileChange={(file) => processMergeFile(file, setSourceHeaders, setSourceFile)} onClear={() => { setSourceFile(null); setSourceHeaders([]); }} />
+              <FileInput id="template-file" label="2. Tải lên File Đích (Mẫu cần điền)" file={templateFile} onFileChange={(file) => processMergeFile(file, setTemplateHeaders, setTemplateFile)} onClear={() => { setTemplateFile(null); setTemplateHeaders([]); }} />
+              
+              <div className="space-y-4">
+                <h3 className="text-base font-medium text-sky-300">3. Thiết lập Quy tắc Nối dữ liệu</h3>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 p-4 bg-zinc-900/50 rounded-lg border border-zinc-700">
+                  <div>
+                    <label className="text-[11px] font-semibold text-zinc-500 uppercase tracking-wider block mb-1.5">Dòng bắt đầu</label>
+                    <input value={startRow} onChange={e => setStartRow(e.target.value)} placeholder="2" type="number" className="w-full bg-zinc-900/50 border border-zinc-700/50 rounded-lg py-2 px-3 text-zinc-200 text-sm placeholder-zinc-600 focus:ring-2 focus:ring-sky-500/50 focus:border-sky-500 outline-none transition duration-200 disabled:opacity-50 hover:bg-zinc-800/50"/>
+                  </div>
+                  <SelectInput label="Cột Khóa (File Đích)" options={templateHeaders} value={templateKeyColumn} onChange={e => setTemplateKeyColumn(e.target.value)} disabled={templateHeaders.length === 0} />
+                  <SelectInput label="Cột Khóa (File Dữ liệu)" options={sourceHeaders} value={sourceKeyColumn} onChange={e => setSourceKeyColumn(e.target.value)} disabled={sourceHeaders.length === 0} />
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <h3 className="text-base font-medium text-sky-300">4. Thiết lập Ánh xạ Cột</h3>
+                {mappings.map((mapping) => (
+                  <div key={mapping.id} className="flex items-center gap-2 p-3 bg-zinc-900/50 rounded-lg border border-zinc-700">
+                    <div className="flex-1">
+                       <SelectInput label="Lấy từ cột (File Dữ liệu)" options={sourceHeaders} value={mapping.source} onChange={e => setMappings(mappings.map(m => m.id === mapping.id ? { ...m, source: e.target.value } : m))} disabled={sourceHeaders.length === 0} />
+                    </div>
+                    <span className="text-sky-400 pt-5">&rarr;</span>
+                     <div className="flex-1">
+                       <SelectInput label="Điền vào cột (File Đích)" options={templateHeaders} value={mapping.destination} onChange={e => setMappings(mappings.map(m => m.id === mapping.id ? { ...m, destination: e.target.value } : m))} disabled={templateHeaders.length === 0} />
+                    </div>
+                    <button onClick={() => setMappings(mappings.filter(m => m.id !== mapping.id))} className="p-2 text-zinc-500 hover:text-red-400 transition-colors self-end mb-1">
+                      <Trash2 className="w-5 h-5"/>
+                    </button>
+                  </div>
+                ))}
+                <Button onClick={() => setMappings([...mappings, { id: Date.now(), source: '', destination: '' }])} colorScheme="slate" className="!w-auto !py-1 !px-3 !text-sm">
+                  <Plus className="w-4 h-4 mr-1"/>
+                  Thêm Quy tắc
+                </Button>
+              </div>
+              
+              <Button onClick={handleConvert} disabled={isMerging || !sourceFile || !templateFile} className="w-full py-3 text-lg mt-4">
+                {isMerging ? <><Spinner /> Đang xử lý...</> : 'Chuyển đổi'}
+              </Button>
+            </div>
+          </div>
+
+          <div className="w-full lg:w-1/3 flex flex-col bg-zinc-800/40 rounded-2xl border border-zinc-700/50 overflow-hidden">
+            <div className="p-4 border-b border-zinc-700/50 bg-zinc-800/80 flex items-center justify-between shrink-0">
+               <h3 className="font-bold text-sky-400 flex items-center gap-2">
+                 <Settings className="w-5 h-5" />
+                 Kết quả & Hướng dẫn
+               </h3>
+            </div>
+            <div className="p-4 sm:p-6 flex-1 overflow-y-auto custom-scrollbar">
+               {mergeError && (
+                <div className="mb-6 bg-red-900/50 text-red-300 p-4 rounded-lg border border-red-700">
+                  <p className="font-semibold">Lỗi</p>
+                  <p>{mergeError}</p>
+                </div>
+              )}
+              {processedData ? (
+                   <div className="text-center flex flex-col items-center justify-center h-full">
+                       <p className="text-green-400 text-lg mb-6">Chuyển đổi thành công!</p>
+                       <div className="flex flex-col sm:flex-row gap-4 w-full max-w-sm">
+                          <Button onClick={() => handleDownloadMerge('xlsx')} colorScheme="green" className="!justify-start !text-left">
+                               <FileSpreadsheet className="w-5 h-5 mr-2 flex-shrink-0" />
+                               <span>Tải xuống<br/><span className="font-normal text-xs">Excel (.xlsx)</span></span>
+                          </Button>
+                          <Button onClick={() => handleDownloadMerge('csv')} colorScheme="sky" className="!justify-start !text-left">
+                              <Download className="w-5 h-5 mr-2 flex-shrink-0" />
+                              <span>Tải xuống<br/><span className="font-normal text-xs">CSV (.csv)</span></span>
+                          </Button>
+                       </div>
+                   </div>
+              ) : (
+                  <div className="prose prose-invert prose-zinc max-w-none text-zinc-300 space-y-4 text-sm">
+                      <p>Công cụ này giúp bạn tự động điền dữ liệu từ một file Excel (File Dữ liệu) vào một file Excel khác (File Đích).</p>
+                      <h3 className="text-base font-semibold text-zinc-200">Cách sử dụng:</h3>
+                      <ul className="list-disc pl-5 space-y-2">
+                        <li><strong>Bước 1 & 2:</strong> Tải lên 2 file Excel. Các cột của file sẽ được tự động nhận diện.</li>
+                        <li><strong>Bước 3: Thiết lập Nối dữ liệu:</strong>
+                          <ul className="list-circle pl-5 mt-1 space-y-1">
+                              <li><strong>Dòng bắt đầu:</strong> Nhập số thứ tự dòng bắt đầu chứa dữ liệu (để bỏ qua tiêu đề, thường là 2).</li>
+                              <li><strong>Cột Khóa:</strong> Chọn cột chứa dữ liệu chung giữa 2 file (ví dụ: cột Mã SKU) từ menu thả xuống.</li>
+                          </ul>
+                        </li>
+                         <li><strong>Bước 4: Thiết lập Ánh xạ Cột:</strong>
+                          <ul className="list-circle pl-5 mt-1 space-y-1">
+                              <li>Nhấn "+ Thêm Quy tắc" để tạo các quy tắc di chuyển dữ liệu.</li>
+                              <li>Với mỗi quy tắc, chọn cột cần lấy dữ liệu từ "File Dữ liệu" và cột cần điền vào trong "File Đích" từ menu thả xuống.</li>
+                          </ul>
+                        </li>
+                      </ul>
+                      <p>Sau khi thiết lập xong, nhấn "Chuyển đổi". Bạn sẽ có thể tải xuống kết quả dưới dạng Excel hoặc CSV.</p>
+                  </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Workflow Tab Content */}
+      {activeSubTab === 'workflow' && (
+        <div className="flex flex-col gap-6">
+          {/* Top Actions Bar */}
+          <div className="flex justify-end gap-3 flex-wrap">
+             <Button onClick={() => setShowDictionaryConfig(!showDictionaryConfig)} className={`text-sm ${showDictionaryConfig ? 'bg-sky-600/20 text-sky-400 border-sky-500/50' : 'bg-zinc-800/50 text-zinc-300 border-zinc-700/50 hover:bg-zinc-700/50'}`} variant="outline">
+                <BookOpen className="w-4 h-4 mr-2" /> Quản lý File Từ Điển
+             </Button>
+             <Button onClick={() => setShowWorkflowGuide(!showWorkflowGuide)} className={`text-sm ${showWorkflowGuide ? 'bg-zinc-700 text-zinc-200 border-zinc-600' : 'bg-zinc-800/50 text-zinc-300 border-zinc-700/50 hover:bg-zinc-700/50'}`} variant="outline">
+                <HelpCircle className="w-4 h-4 mr-2" /> {showWorkflowGuide ? 'Ẩn Hướng dẫn' : 'Hướng dẫn Quy trình'}
+             </Button>
+          </div>
+
+          {/* Dictionary Section (Conditional) */}
+          {showDictionaryConfig && (
+            <div className="bg-zinc-800/40 p-6 rounded-2xl border border-zinc-700/50 shadow-lg relative">
+               <div className="flex justify-between items-start mb-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-sky-400 flex items-center gap-2">
+                      <BookOpen className="w-5 h-5" /> Quản lý Tệp Từ Điển (Dữ liệu mẫu)
+                    </h2>
+                    <p className="text-sm text-zinc-400 mt-1">Cập nhật một lần, tái sử dụng cho mọi lần chuyển đổi file tiếp theo.</p>
+                  </div>
+                  <button onClick={() => setShowDictionaryConfig(false)} className="text-zinc-500 hover:text-zinc-300 bg-zinc-900 hover:bg-zinc-800 rounded-lg p-1 transition-colors"><X className="w-5 h-5"/></button>
+               </div>
+                <div>
+                  <div className="flex items-center justify-between mb-2">
+                    <label className="text-sm font-medium text-zinc-300">File Từ Điển Hệ Thống</label>
+                    {isDictionarySaved && (
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        <CheckCircle className="w-3.5 h-3.5 mr-1" /> Đã lưu mặc định
+                      </span>
+                    )}
+                  </div>
+                  <button 
+                    onClick={() => setShowDictionaryModal(true)}
+                    className={`w-full h-16 border rounded-xl flex items-center justify-center transition-colors ${dictionaryText ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20' : 'bg-zinc-950 border-zinc-700/50 text-zinc-400 hover:border-sky-500/50 hover:text-sky-400'}`}
+                  >
+                    <Table className="w-5 h-5 mr-2" />
+                    {dictionaryText ? 'Chỉnh sửa Từ Điển (Đã có dữ liệu)' : 'Click để Dán Dữ Liệu Từ Điển (Copy từ Excel)'}
+                  </button>
+                  <div className="flex justify-end mt-2">
+                    <button onClick={handleDictionaryClear} className="text-xs text-red-400 hover:text-red-300 transition-colors">Xóa trắng từ điển</button>
+                  </div>
+                  <p className="text-xs text-zinc-500 mt-2 text-center">Copy & Paste bảng từ điển (Thương hiệu, Danh mục, Đơn vị tính...). Nội dung sẽ được lưu lại làm mặc định cho các lần sử dụng sau.</p>
+               </div>
+            </div>
+          )}
+
+          <div className="flex flex-col xl:flex-row gap-6">
+            {/* Left Column: Inputs & Actions */}
+            <div className="w-full xl:w-1/3 flex flex-col gap-6">
+              <div className="bg-zinc-800/40 p-6 rounded-2xl border border-zinc-700/50">
+                <h2 className="text-xl font-bold text-sky-400 mb-4 flex items-center gap-2">
+                  <FileUp className="w-6 h-6" />
+                  1. Dữ liệu chuẩn bị
+                </h2>
+                <div className="space-y-6">
+                  <div>
+                    <label className="text-sm font-medium text-zinc-300 block mb-2">File dữ liệu thô (Từ NCC)</label>
+                    <FileInput 
+                      id="raw-file"
+                      label="Kéo thả hoặc nhấp để tải lên file Excel/CSV"
+                      file={workflowRawFile}
+                      onFileChange={setWorkflowRawFile}
+                      onClear={() => setWorkflowRawFile(null)}
+                    />
+                    <p className="text-xs text-zinc-500 mt-2">Hệ thống sẽ tự động bỏ qua các dòng rác ban đầu.</p>
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                       <label className="text-sm font-medium text-zinc-300">Dữ liệu Biểu mẫu chuẩn (Đích)</label>
+                    </div>
+                    <button 
+                      onClick={() => setShowTemplateModal(true)}
+                      className={`w-full h-16 border rounded-xl flex items-center justify-center transition-colors ${templateText ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 hover:bg-emerald-500/20' : 'bg-zinc-950 border-zinc-700/50 text-zinc-400 hover:border-sky-500/50 hover:text-sky-400'}`}
+                    >
+                      <Table className="w-5 h-5 mr-2" />
+                      {templateText ? 'Chỉnh sửa Biểu mẫu (Đã có dữ liệu)' : 'Click để Dán Dữ Liệu Biểu Mẫu (Copy từ Excel)'}
+                    </button>
+                    <div className="flex justify-end mt-2">
+                       <button onClick={() => handleTemplateChange('')} className="text-xs text-red-400 hover:text-red-300 transition-colors">Xóa trắng biểu mẫu</button>
+                    </div>
+                    <p className="text-xs text-zinc-500 mt-2">Copy trực tiếp từ file mẫu (chọn cả dòng tiêu đề và 2-3 dòng dữ liệu mẫu bên dưới).</p>
+                  </div>
+                </div>
+
+                {/* Tích hợp mở rộng / Options */}
+              <div className="mt-6 pt-6 border-t border-zinc-700/50">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-sm font-semibold text-sky-400 flex items-center gap-2">
+                    <RefreshCw className="w-4 h-4" /> Tích hợp mở rộng (Tùy chọn)
+                  </h3>
+                  <button 
+                    onClick={() => setShowTokenOptGuide(true)}
+                    className="flex items-center gap-1.5 text-xs font-medium text-amber-400 hover:text-amber-300 bg-amber-400/10 hover:bg-amber-400/20 px-2.5 py-1.5 rounded-lg transition-colors border border-amber-400/20"
+                  >
+                    <Lightbulb className="w-3.5 h-3.5" /> Mẹo tối ưu Token
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  <label className="flex items-start gap-3 p-3 rounded-lg border border-zinc-700/50 bg-zinc-900/50 cursor-pointer hover:border-sky-500/30 transition-colors">
+                    <input 
+                      type="checkbox" 
+                      className="mt-1 flex-shrink-0" 
+                      checked={useAiDeepMatch}
+                      onChange={(e) => setUseAiDeepMatch(e.target.checked)}
+                    />
+                    <div>
+                      <span className="text-sm font-medium text-zinc-200 block">Sử dụng AI Deep Match để ánh xạ cột</span>
+                      <span className="text-xs text-zinc-400">Tự động sử dụng mô hình Gemini Pro để ánh xạ tiêu đề cột giữa file thô và file mẫu nếu tên không trùng khớp chính xác. (Khuyên dùng)</span>
+                    </div>
+                  </label>
+                  <label className={`flex items-start gap-3 p-3 rounded-lg border border-zinc-700/50 bg-zinc-900/50 transition-colors ${!useAiDeepMatch ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer hover:border-sky-500/30'}`}>
+                    <input 
+                      type="checkbox" 
+                      className="mt-1 flex-shrink-0" 
+                      checked={useSmartPrompt}
+                      onChange={(e) => setUseSmartPrompt(e.target.checked)}
+                      disabled={!useAiDeepMatch}
+                    />
+                    <div>
+                      <span className="text-sm font-medium text-zinc-200 block">Sử dụng Prompt thông minh (Tiết kiệm Token)</span>
+                      <span className="text-xs text-zinc-400">Tự động chuyển đổi định dạng dữ liệu đầu vào sang CSV/JSON rút gọn trước khi gửi cho AI xử lý để giảm token tiêu thụ.</span>
+                    </div>
+                  </label>
+                </div>
+              </div>
+              
+              <div className="mt-8">
+                {totalTokensSaved > 0 && (
+                  <div className="mb-4 bg-emerald-950/30 border border-emerald-500/20 p-4 rounded-xl flex items-center justify-between">
+                    <div>
+                      <h4 className="text-sm font-semibold text-emerald-400 flex items-center gap-1.5"><Sparkles className="w-4 h-4"/> Token Đã Tiết Kiệm</h4>
+                      <p className="text-xs text-zinc-400 mt-1">Dựa trên các kỹ thuật tối ưu hóa đầu vào (Prompt thông minh).</p>
+                    </div>
+                    <div className="text-2xl font-bold text-emerald-300 bg-emerald-500/10 px-3 py-1.5 rounded-lg border border-emerald-500/20">
+                      ~{totalTokensSaved.toLocaleString()}
+                    </div>
+                  </div>
+                )}
+                {isWorkflowProcessing && workflowStatus && (
+                  <div className="mb-4 text-sm font-medium text-sky-400 flex items-center gap-2 bg-sky-500/10 p-3 rounded-lg border border-sky-500/20">
+                    <Spinner className="w-4 h-4" />
+                    {workflowStatus}
+                  </div>
+                )}
+                <Button 
+                  className="w-full justify-center bg-sky-600 hover:bg-sky-500 text-white" 
+                  disabled={!workflowRawFile || !templateText || !dictionaryText || isWorkflowProcessing}
+                  onClick={handleProcessWorkflow}
+                >
+                  {isWorkflowProcessing ? <><Spinner className="w-5 h-5 mr-2" /> Đang xử lý...</> : <><Database className="w-5 h-5 mr-2" /> Bắt đầu Chuẩn hóa</>}
+                </Button>
+                {workflowError && (
+                  <div className="mt-4 p-3 bg-red-500/10 border border-red-500/50 rounded-lg text-sm text-red-400">
+                    <AlertTriangle className="w-4 h-4 inline mr-2" />
+                    {workflowError}
+                  </div>
+                )}
+                {workflowSuccess && (
+                  <div className="mt-4 p-3 bg-emerald-500/10 border border-emerald-500/50 rounded-lg text-sm text-emerald-400">
+                    <CheckCircle className="w-4 h-4 inline mr-2" />
+                    {workflowSuccess}
+                  </div>
+                )}
+                <p className="text-xs text-center text-zinc-500 mt-3">*Tính năng đang được tối ưu hóa dần bằng WebWorker.</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column: Workflow Explanation */}
+          {showWorkflowGuide && (
+            <div className="w-full xl:w-2/3 flex flex-col gap-6">
+              <div className="bg-zinc-800/40 p-6 rounded-2xl border border-zinc-700/50">
+              <h2 className="text-xl font-bold text-sky-400 mb-4 flex items-center gap-2">
+                <RefreshCw className="w-6 h-6" />
+                2. Quy trình xử lý ngầm (AI Processing)
+              </h2>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <div className="p-4 bg-zinc-900/50 border border-zinc-700/50 rounded-xl relative overflow-hidden group hover:border-sky-500/50 transition-colors">
+                  <div className="absolute top-0 left-0 w-1 h-full bg-sky-500"></div>
+                  <h3 className="font-semibold text-zinc-200 mb-2 flex items-center gap-2"><Database className="w-4 h-4 text-sky-400" /> Bước 1 - Học "Từ điển"</h3>
+                  <p className="text-sm text-zinc-400">Hệ thống quét toàn bộ nội dung từ File Từ Điển để ghi nhớ sự tương quan. <br/><br/>VD: <code className="text-sky-300 bg-sky-400/10 px-1 rounded">Canifa</code> {'->'} <code className="text-sky-300 bg-sky-400/10 px-1 rounded">B2734_Canifa</code></p>
+                </div>
+                <div className="p-4 bg-zinc-900/50 border border-zinc-700/50 rounded-xl relative overflow-hidden group hover:border-sky-500/50 transition-colors">
+                  <div className="absolute top-0 left-0 w-1 h-full bg-emerald-500"></div>
+                  <h3 className="font-semibold text-zinc-200 mb-2 flex items-center gap-2"><Trash2 className="w-4 h-4 text-emerald-400" /> Bước 2 - Làm sạch form</h3>
+                  <p className="text-sm text-zinc-400">Xóa bỏ hoàn toàn các dòng dữ liệu ví dụ (bôi xám) trong file biểu mẫu (sheet Nhập liệu) để tránh tải rác.</p>
+                </div>
+                <div className="p-4 bg-zinc-900/50 border border-zinc-700/50 rounded-xl relative overflow-hidden group hover:border-sky-500/50 transition-colors md:col-span-3">
+                  <div className="absolute top-0 left-0 w-1 h-full bg-purple-500"></div>
+                  <h3 className="font-semibold text-zinc-200 mb-2 flex items-center gap-2"><SplitSquareHorizontal className="w-4 h-4 text-purple-400" /> Bước 3 - Ánh xạ & Biến đổi (Tích hợp AI)</h3>
+                  <p className="text-sm text-zinc-400">Lấy dữ liệu từ file thô đổ vào Sheet "Nhập liệu". Dùng AI và thuật toán đối chiếu với "Từ điển" để tự động xuất ra mã quy chuẩn cho các cột hệ thống.</p>
+                  <div className="mt-3 bg-purple-500/10 border border-purple-500/20 rounded p-2 text-xs text-zinc-300">
+                    <span className="font-semibold text-purple-400 flex items-center gap-1 mb-1"><Sparkles className="w-3 h-3" /> Trí tuệ AI nhận diện danh mục:</span>
+                    Ví dụ: Nhận diện tên <code className="bg-zinc-800 px-1 rounded text-sky-300">Sữa tắm gội chiết xuất yến mạch Chicco 0M+ - Chai du lịch 50ml</code> {'->'} Điền tự động Danh mục (cột F) là <code className="bg-zinc-800 px-1 rounded text-purple-300">C1151_Dầu gội, Dầu xả</code> dựa theo dữ liệu mẫu.
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div className="bg-amber-500/5 p-6 rounded-2xl border border-amber-500/20">
+                <h2 className="text-xl font-bold text-amber-500 mb-4 flex items-center gap-2">
+                  <AlertTriangle className="w-6 h-6" />
+                  3. Kiểm soát rủi ro & Xử lý lỗi (QC)
+                </h2>
+                <ul className="space-y-3 text-sm text-zinc-300">
+                  <li className="flex items-start gap-2">
+                    <span className="text-red-400 mt-0.5">▪</span>
+                    <span><strong>KHÔNG tự bịa dữ liệu:</strong> Từ khóa mới (chưa có trong Từ điển) sẽ không được tạo mã ảo.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-amber-400 mt-0.5">▪</span>
+                    <span><strong>Gắn cờ cảnh báo:</strong> Điền mã lỗi <code className="bg-amber-500/20 text-amber-300 px-1 rounded whitespace-nowrap">⚠️ [Từ khóa]</code> ngay tại ô đó trong file kết quả.</span>
+                  </li>
+                  <li className="flex items-start gap-2">
+                    <span className="text-green-400 mt-0.5">▪</span>
+                    <span><strong>Gỡ lỗi dễ dàng:</strong> Phát hiện dấu ⚠️, vào File Từ Điển bổ sung mã mới và chạy lại là xong.</span>
+                  </li>
+                </ul>
+              </div>
+
+              <div className="bg-zinc-800/40 p-6 rounded-2xl border border-zinc-700/50 flex flex-col justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-emerald-400 mb-4 flex items-center gap-2">
+                    <CheckCircle className="w-6 h-6" />
+                    4. Kết quả đầu ra (Output)
+                  </h2>
+                  <p className="text-sm text-zinc-300 mb-4">
+                    Một file Excel hoàn chỉnh, giữ nguyên 100% định dạng, tên cột và cấu trúc ẩn của biểu mẫu VNShop, sẵn sàng upload thẳng lên Seller Center ngay lập tức.
+                  </p>
+                  <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-3 text-sm text-zinc-300 border-l-2 border-l-emerald-500">
+                    <strong>Logic nhận diện Thuộc tính:</strong> Tự động phân loại dòng sản phẩm gốc (CHA) và các dòng biến thể màu/size (BT) dựa trên cấu trúc file thô.
+                  </div>
+                </div>
+              </div>
+            </div>
+            </div>
+          )}
+          </div>
+
+          {/* Log Panel for Data Matching */}
+          {matchingLogs.length > 0 && (
+            <div className="bg-zinc-800/40 p-6 rounded-2xl border border-zinc-700/50 mt-6">
+              <h2 className="text-lg font-bold text-sky-400 mb-4 flex items-center gap-2">
+                <Database className="w-5 h-5" /> Log Bóc Tách & So Khớp Từ Điển
+              </h2>
+              <div className="overflow-x-auto max-h-96 overflow-y-auto">
+                <table className="min-w-full text-sm text-left border-collapse">
+                  <thead className="text-xs text-zinc-400 uppercase tracking-wider bg-zinc-900/80 sticky top-0 border-b border-zinc-700">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">Dòng</th>
+                      <th className="px-4 py-3 font-medium">Cột (Tiêu đề Mẫu)</th>
+                      <th className="px-4 py-3 font-medium">Giá trị đầu vào (File Thô)</th>
+                      <th className="px-4 py-3 font-medium">Tìm thấy trong Từ Điển</th>
+                      <th className="px-4 py-3 font-medium">Giá trị chốt (Kết quả)</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-700/50">
+                    {matchingLogs.map((log, idx) => (
+                      <tr key={idx} className={`hover:bg-zinc-800/50 transition-colors ${log.hasError ? 'bg-red-500/5' : ''}`}>
+                        <td className="px-4 py-3 text-zinc-300 font-mono text-xs">{log.rowIndex}</td>
+                        <td className="px-4 py-3 text-sky-300">{log.columnName}</td>
+                        <td className="px-4 py-3 text-zinc-300">{log.rawValue}</td>
+                        <td className="px-4 py-3">
+                          {log.mappedValue ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/10 text-emerald-400">
+                              {log.mappedValue}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-zinc-700 text-zinc-400">
+                              N/A
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 font-medium">
+                          {log.hasError ? (
+                            <span className="text-red-400 flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3" /> {log.finalValue}
+                            </span>
+                          ) : (
+                            <span className="text-emerald-400">{log.finalValue}</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
+
+      {/* History Tab Content */}
+      {activeSubTab === 'history' && (
+        <div className="flex flex-col gap-6">
+          <div className="bg-zinc-800/40 p-6 rounded-2xl border border-zinc-700/50">
+            <h2 className="text-xl font-bold text-sky-400 mb-4 flex items-center gap-2">
+              <FileSpreadsheet className="w-6 h-6" /> Lịch sử Chuyển đổi File
+            </h2>
+            <p className="text-sm text-zinc-400 mb-6">Danh sách các file bạn đã xử lý và tải xuống. Dữ liệu file được lưu cục bộ trên thiết bị này. Click "Tải lại" để nhận lại file đã xử lý mà không cần chạy lại thuật toán.</p>
+            
+            {isLoadingHistory ? (
+              <div className="flex justify-center items-center py-12">
+                <Spinner className="w-8 h-8 text-sky-500" />
+              </div>
+            ) : historyList.length === 0 ? (
+              <div className="text-center py-12 border-2 border-dashed border-zinc-700/50 rounded-xl">
+                <FileSpreadsheet className="w-12 h-12 text-zinc-600 mx-auto mb-3" />
+                <p className="text-zinc-400">Bạn chưa thực hiện bất kỳ phiên chuyển đổi nào.</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="min-w-full text-sm text-left border-collapse">
+                  <thead className="text-xs text-zinc-400 uppercase tracking-wider bg-zinc-900/50 border-b border-zinc-700">
+                    <tr>
+                      <th className="px-4 py-3 font-medium">Thời gian</th>
+                      <th className="px-4 py-3 font-medium">Tài khoản</th>
+                      <th className="px-4 py-3 font-medium">Tên file thô</th>
+                      <th className="px-4 py-3 font-medium">Tên file xuất</th>
+                      <th className="px-4 py-3 font-medium text-center">Số dòng</th>
+                      <th className="px-4 py-3 font-medium text-center">Trạng thái</th>
+                      <th className="px-4 py-3 font-medium text-right">Thao tác</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-700/50">
+                    {historyList.map((item) => (
+                      <tr key={item.id} className="hover:bg-zinc-800/50 transition-colors group">
+                        <td className="px-4 py-3 text-zinc-300">
+                          {item.createdAt ? new Date(item.createdAt.seconds * 1000).toLocaleString('vi-VN') : 'N/A'}
+                        </td>
+                        <td className="px-4 py-3 text-sky-300 text-xs truncate max-w-[150px]" title={item.userEmail || 'N/A'}>
+                          {item.userEmail || 'N/A'}
+                        </td>
+                        <td className="px-4 py-3 text-zinc-200 font-medium truncate max-w-[200px]" title={item.fileName}>
+                          {item.fileName}
+                        </td>
+                        <td className="px-4 py-3 text-zinc-400 truncate max-w-[200px]" title={item.outputFileName}>
+                          {item.outputFileName}
+                        </td>
+                        <td className="px-4 py-3 text-zinc-300 text-center text-xs font-mono">
+                          {item.rowCount}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {item.status === 'success' ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">Thành công</span>
+                          ) : (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-500/10 text-red-400 border border-red-500/20">Thất bại</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          <Button 
+                            onClick={() => handleDownloadHistoricalFile(item.fileId, item.outputFileName)}
+                            className="bg-transparent hover:bg-zinc-700 text-sky-400 border-zinc-600 px-3 py-1.5 text-xs inline-flex"
+                            variant="outline"
+                          >
+                            <Download className="w-3.5 h-3.5 mr-1.5" /> Tải lại
+                          </Button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+      
+      <SpreadsheetEditorModal
+        isOpen={showDictionaryModal}
+        onClose={() => setShowDictionaryModal(false)}
+        title="Dữ Liệu Từ Điển Hệ Thống"
+        text={dictionaryText}
+        onChange={handleDictionaryChange}
+        hint="Copy các cột từ file Excel Từ Điển (như Tên NCC, Đơn vị tính, Thương hiệu) và Paste (Ctrl+V) vào ô trống bên dưới để hệ thống ghi nhận dạng bảng."
+        id="dictionary-text"
+      />
+
+      <SpreadsheetEditorModal
+        isOpen={showTemplateModal}
+        onClose={() => setShowTemplateModal(false)}
+        title="Dữ Liệu Biểu Mẫu Chuẩn"
+        text={templateText}
+        onChange={handleTemplateChange}
+        hint="Copy dòng Tiêu đề cột và một vài dòng Dữ liệu Mẫu từ file biểu mẫu chuẩn của VNShop, sau đó Paste (Ctrl+V) vào ô trống bên dưới."
+        id="template-text"
+      />
+
+      {showTokenOptGuide && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+          <div className="bg-zinc-900 border border-zinc-700/50 rounded-2xl shadow-2xl w-full max-w-2xl overflow-hidden flex flex-col max-h-[90vh]">
+            <div className="p-4 border-b border-zinc-800 flex justify-between items-center bg-zinc-800/30">
+              <h2 className="text-lg font-bold text-sky-400 flex items-center gap-2">
+                <Lightbulb className="w-5 h-5" /> Tối ưu hóa Token (Best Practices)
+              </h2>
+              <button onClick={() => setShowTokenOptGuide(false)} className="text-zinc-400 hover:text-white transition-colors">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 overflow-y-auto space-y-6 text-sm text-zinc-300">
+              <p>
+                Để tiết kiệm token và tăng tốc độ xử lý khi sử dụng <strong>AI Deep Match</strong>, bạn nên áp dụng các cách sau để tối ưu hóa dữ liệu đầu vào.
+              </p>
+
+              <div className="space-y-4">
+                <div className="bg-zinc-800/50 p-4 rounded-xl border border-zinc-700/50">
+                  <h3 className="text-base font-semibold text-white mb-2">1. Chỉ cung cấp tối đa 3-5 dòng dữ liệu mẫu</h3>
+                  <p className="text-zinc-400 mb-2">AI không cần toàn bộ hàng nghìn dòng dữ liệu để hiểu cấu trúc. Chỉ cần copy 3-5 dòng đại diện nhất từ file mẫu và file thô.</p>
+                  <div className="bg-zinc-950 p-3 rounded border border-zinc-800 font-mono text-xs overflow-x-auto text-green-400">
+                    <span className="text-zinc-500 block mb-1">// Nên làm:</span>
+                    Mã SP | Tên SP | Danh mục<br/>
+                    SP01 | Bỉm tã | C1122<br/>
+                    SP02 | Sữa bột | C1133
+                  </div>
+                </div>
+
+                <div className="bg-zinc-800/50 p-4 rounded-xl border border-zinc-700/50">
+                  <h3 className="text-base font-semibold text-white mb-2">2. Xóa các cột trống hoặc cột không cần thiết</h3>
+                  <p className="text-zinc-400 mb-2">Trước khi copy dữ liệu mẫu, hãy xóa các cột không có dữ liệu hoặc các cột không cần ánh xạ (như Ghi chú nội bộ, Tên NV...).</p>
+                </div>
+
+                <div className="bg-zinc-800/50 p-4 rounded-xl border border-zinc-700/50">
+                  <h3 className="text-base font-semibold text-white mb-2">3. Đảm bảo dữ liệu mẫu gọn gàng</h3>
+                  <p className="text-zinc-400 mb-2">Tránh copy các dòng có chứa văn bản quá dài (như cột Mô tả chứa hàng nghìn từ) vào Dữ liệu mẫu nếu không cần thiết AI phải phân tích nội dung đó.</p>
+                </div>
+
+                <div className="bg-sky-900/20 p-4 rounded-xl border border-sky-500/20">
+                  <h3 className="text-base font-semibold text-sky-400 mb-2 flex items-center gap-2"><Sparkles className="w-4 h-4" /> Hệ thống tự động tối ưu (Prompt thông minh)</h3>
+                  <p className="text-sky-200">
+                    Tính năng <strong>Prompt thông minh</strong> (đã bật mặc định) sẽ tự động nén dữ liệu Excel dạng bảng của bạn thành định dạng CSV thu gọn, loại bỏ các khoảng trắng thừa và ký tự xuống dòng trước khi gửi đi, giúp giảm đến 50% số token tiêu thụ so với việc gửi định dạng JSON.
+                  </p>
+                </div>
+              </div>
+            </div>
+            <div className="p-4 border-t border-zinc-800 bg-zinc-900 flex justify-end">
+              <Button onClick={() => setShowTokenOptGuide(false)} colorScheme="sky">
+                Đã hiểu
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mappingDialog && (
+        <MappingModal
+          isOpen={mappingDialog.isOpen}
+          rawHeaders={mappingDialog.rawHeaders}
+          tplHeaders={mappingDialog.tplHeaders}
+          initialMapping={mappingDialog.mapping}
+          onConfirm={(mapping) => mappingDialog.resolve(mapping)}
+          onCancel={() => mappingDialog.resolve(null)}
+        />
+      )}
+    </div>
+  );
+};
+
+export default FileConverterV2Tab;

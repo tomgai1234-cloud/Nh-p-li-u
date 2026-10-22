@@ -1,0 +1,680 @@
+
+import React, { useState, useEffect, useMemo } from 'react';
+import DescriptionGeneratorTab from './components/tabs/DescriptionGeneratorTab';
+import ImageEditorTab from './components/tabs/ImageEditorTab';
+import GuideTab from './components/tabs/GuideTab';
+import DashboardTab from './components/tabs/DashboardTab';
+import { 
+  FileText, Image as ImageIcon, BookOpen, FileInput, MessageSquare, 
+  ScanLine, ImageDown, Tag, DownloadCloud, Video, Monitor, 
+  LayoutTemplate, Menu, X, ChevronDown, ChevronRight, Search,
+  PanelLeftClose, PanelLeftOpen, LayoutGrid, Sparkles, Database, HelpCircle,
+  LogOut, LogIn, User as UserIcon, Key, Code, Layers, LayoutDashboard, Users, ShieldAlert, Globe
+} from 'lucide-react';
+import { auth, signInWithGoogle, logout, db } from './src/firebase';
+import { onAuthStateChanged, User } from 'firebase/auth';
+import { doc, setDoc, getDoc, serverTimestamp } from 'firebase/firestore';
+import FileConverterV2Tab from './components/tabs/FileConverterV2Tab';
+import ChatbotTab from './components/tabs/ChatbotTab';
+import ProductExtractorTab from './components/tabs/ProductExtractorTab';
+import ImageScraperTab from './components/tabs/ImageScraperTab';
+import ProductNameStandardizerTab from './components/tabs/ProductNameStandardizerTab';
+import BulkDownloadTab from './components/tabs/BulkDownloadTab';
+import VideoEditorTab from './components/tabs/VideoEditorTab';
+import DownloadAppTab from './components/tabs/DownloadAppTab';
+import BatchFrameTab from './components/tabs/BatchFrameTab';
+import { ApiKeysTab } from './components/tabs/ApiKeysTab';
+
+import { Toaster } from 'react-hot-toast';
+
+import RawImageScraperTab from './components/tabs/RawImageScraperTab';
+import ShopeeScraperTab from './components/tabs/ShopeeScraperTab';
+import WebTarsScraperTab from './components/tabs/WebTarsScraperTab';
+import ScraperHubTab from './components/tabs/ScraperHubTab';
+
+import UserManagementTab from './components/tabs/UserManagementTab';
+import GlobalChat from './components/GlobalChat';
+
+import DocumentExtractorTab from './components/tabs/DocumentExtractorTab';
+
+type ActiveTabId = 'dashboard' | 'description' | 'image' | 'chatbot' | 'converter-v2' | 'guide' | 'extractor' | 'scraper-hub' | 'standardizer' | 'bulk-download' | 'video-editor' | 'download-app' | 'batch-frame' | 'api-keys' | 'user-management';
+
+interface TabItem {
+  id: ActiveTabId;
+  label: string;
+  icon: React.ReactNode;
+  component: React.ReactNode;
+}
+
+interface TabGroup {
+  id: string;
+  label: string;
+  icon: React.ReactNode;
+  tabs: ActiveTabId[];
+}
+
+interface UserProfile {
+  uid: string;
+  email: string;
+  displayName: string;
+  photoURL: string;
+  role: 'admin' | 'user' | 'blocked';
+  allowedTabs?: ActiveTabId[];
+}
+
+const APP_VERSION = '1.4.0';
+
+const TAB_COMPONENTS: Record<ActiveTabId, React.ComponentType> = {
+  'dashboard': DashboardTab,
+  'description': DescriptionGeneratorTab,
+  'batch-frame': BatchFrameTab,
+  'extractor': ProductExtractorTab,
+  'standardizer': ProductNameStandardizerTab,
+  'image': ImageEditorTab,
+  'video-editor': VideoEditorTab,
+  'scraper-hub': ScraperHubTab,
+  'bulk-download': BulkDownloadTab,
+  'converter-v2': FileConverterV2Tab,
+  'chatbot': ChatbotTab,
+  'download-app': DownloadAppTab,
+  'guide': GuideTab,
+  'api-keys': ApiKeysTab,
+  'user-management': UserManagementTab,
+};
+
+const TAB_LABELS: Record<ActiveTabId, string> = {
+  'dashboard': 'Dashboard',
+  'description': 'Tạo Mô tả',
+  'batch-frame': 'Tạo Khung Hàng Loạt',
+  'extractor': 'Lấy thuộc tính',
+  'standardizer': 'Chuẩn hóa Tên',
+  'image': 'Chỉnh sửa Ảnh',
+  'video-editor': 'Chỉnh sửa Video',
+  'scraper-hub': 'Cào Dữ Liệu',
+  'bulk-download': 'Tải Ảnh Hàng Loạt',
+  'converter-v2': 'Tự động Chuẩn hóa',
+  'chatbot': 'Chatbot',
+  'download-app': 'Tải App',
+  'guide': 'Hướng dẫn',
+  'api-keys': 'Quản lý API Key',
+  'user-management': 'Quản lý Người dùng',
+};
+
+const TAB_ICONS: Record<ActiveTabId, React.ReactNode> = {
+  'dashboard': <LayoutDashboard className="w-5 h-5" />,
+  'description': <FileText className="w-5 h-5" />,
+  'batch-frame': <LayoutTemplate className="w-5 h-5" />,
+  'extractor': <ScanLine className="w-5 h-5" />,
+  'standardizer': <Tag className="w-5 h-5" />,
+  'image': <ImageIcon className="w-5 h-5" />,
+  'video-editor': <Video className="w-5 h-5" />,
+  'scraper-hub': <ImageDown className="w-5 h-5" />,
+  'bulk-download': <DownloadCloud className="w-5 h-5" />,
+  'converter-v2': <FileInput className="w-5 h-5" />,
+  'chatbot': <MessageSquare className="w-5 h-5" />,
+  'download-app': <Monitor className="w-5 h-5" />,
+  'guide': <BookOpen className="w-5 h-5" />,
+  'api-keys': <Key className="w-5 h-5" />,
+  'user-management': <Users className="w-5 h-5" />,
+};
+
+const TAB_GROUPS: TabGroup[] = [
+  {
+    id: 'overview',
+    label: 'Tổng quan',
+    icon: <LayoutDashboard className="w-5 h-5" />,
+    tabs: ['dashboard']
+  },
+  {
+    id: 'product',
+    label: 'Quản lý Sản phẩm',
+    icon: <LayoutGrid className="w-5 h-5" />,
+    tabs: ['description', 'extractor', 'standardizer']
+  },
+  {
+    id: 'media',
+    label: 'Chỉnh sửa Media',
+    icon: <Sparkles className="w-5 h-5" />,
+    tabs: ['image', 'video-editor', 'batch-frame']
+  },
+  {
+    id: 'data',
+    label: 'Công cụ Dữ liệu',
+    icon: <Database className="w-5 h-5" />,
+    tabs: ['scraper-hub', 'bulk-download', 'converter-v2']
+  },
+  {
+    id: 'system',
+    label: 'Hệ thống & Hỗ trợ',
+    icon: <HelpCircle className="w-5 h-5" />,
+    tabs: ['chatbot', 'api-keys', 'download-app', 'guide', 'user-management']
+  }
+];
+
+const App: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<ActiveTabId | null>(() => {
+    const saved = localStorage.getItem('appActiveTab');
+    return (saved as ActiveTabId) || null;
+  });
+  
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // Mobile sidebar
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+    const saved = localStorage.getItem('sidebarCollapsed');
+    return saved === 'true';
+  });
+
+  const [user, setUser] = useState<User | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
+      setUser(currentUser);
+      if (currentUser) {
+        // Sync user profile to Firestore
+        const userDocRef = doc(db, 'users', currentUser.uid);
+        let role: 'admin' | 'user' | 'blocked' = 'user';
+        let allowedTabs: ActiveTabId[] | undefined;
+        
+        try {
+          const userDoc = await getDoc(userDocRef);
+          
+          role = (userDoc.exists() ? userDoc.data().role : 'user') as 'admin' | 'user' | 'blocked';
+          if (currentUser.email === 'tungnguyen.0612993@gmail.com') {
+            role = 'admin';
+          }
+          
+          allowedTabs = userDoc.exists() ? userDoc.data().allowedTabs : undefined;
+
+          const profileData: UserProfile = {
+            uid: currentUser.uid,
+            email: currentUser.email || '',
+            displayName: currentUser.displayName || 'User',
+            photoURL: currentUser.photoURL || '',
+            role,
+            allowedTabs
+          };
+
+          if (!userDoc.exists()) {
+            await setDoc(userDocRef, {
+              ...profileData,
+              createdAt: serverTimestamp(),
+              lastLogin: serverTimestamp()
+            });
+          } else {
+            await setDoc(userDocRef, {
+              role, // Ensure the superadmin role is forced back to db if changed
+              lastLogin: serverTimestamp()
+            }, { merge: true });
+          }
+          
+          setUserProfile(profileData);
+        } catch (error) {
+          console.warn("Firestore offline or unavailable, using local fallback profile.", error);
+          // Fallback if offline
+          if (currentUser.email === 'tungnguyen.0612993@gmail.com') {
+            role = 'admin';
+          }
+          const profileData: UserProfile = {
+            uid: currentUser.uid,
+            email: currentUser.email || '',
+            displayName: currentUser.displayName || 'User',
+            photoURL: currentUser.photoURL || '',
+            role,
+            allowedTabs: undefined
+          };
+          setUserProfile(profileData);
+        }
+      } else {
+        setUserProfile(null);
+      }
+      setIsAuthReady(true);
+    });
+    return () => unsubscribe();
+  }, []);
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchOpen, setIsSearchOpen] = useState(false); // Mobile search toggle
+
+  const availableTabGroups = useMemo(() => {
+    return TAB_GROUPS.map(group => {
+      let tabs = [...group.tabs];
+      const isAdmin = userProfile?.role === 'admin' || user?.email === 'tungnguyen.0612993@gmail.com';
+      
+      if (!isAdmin) {
+        tabs = tabs.filter(t => t !== 'user-management');
+        if (userProfile && userProfile.allowedTabs) {
+          tabs = tabs.filter(t => t === 'dashboard' || t === 'guide' || userProfile.allowedTabs!.includes(t));
+        }
+      }
+      
+      return { ...group, tabs };
+    }).filter(group => group.tabs.length > 0);
+  }, [userProfile?.role, userProfile?.allowedTabs, user?.email]);
+
+  const filteredTabGroups = useMemo(() => {
+    if (!searchQuery.trim()) return availableTabGroups;
+    
+    const query = searchQuery.toLowerCase();
+    return availableTabGroups.map(group => {
+      const filteredTabs = group.tabs.filter(tabId => 
+        TAB_LABELS[tabId].toLowerCase().includes(query) ||
+        group.label.toLowerCase().includes(query)
+      );
+      
+      if (filteredTabs.length > 0) {
+        return { ...group, tabs: filteredTabs };
+      }
+      return null;
+    }).filter(Boolean) as TabGroup[];
+  }, [searchQuery, availableTabGroups]);
+
+  useEffect(() => {
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase();
+      const matchingGroupIds = TAB_GROUPS.filter(group => 
+        group.label.toLowerCase().includes(query) ||
+        group.tabs.some(tabId => TAB_LABELS[tabId].toLowerCase().includes(query))
+      ).map(g => g.id);
+      
+      setExpandedGroups(prev => [...new Set([...prev, ...matchingGroupIds])]);
+    }
+  }, [searchQuery]);
+
+  const [expandedGroups, setExpandedGroups] = useState<string[]>(() => {
+    const saved = localStorage.getItem('expandedGroups');
+    if (saved) return JSON.parse(saved);
+    // Expand the group containing the active tab by default
+    const initialGroup = TAB_GROUPS.find(g => activeTab && g.tabs.includes(activeTab));
+    return initialGroup ? [initialGroup.id] : [TAB_GROUPS[0].id];
+  });
+
+  useEffect(() => {
+    if (activeTab) {
+      if (!TAB_COMPONENTS[activeTab]) {
+         setActiveTab('dashboard');
+      } else {
+         localStorage.setItem('appActiveTab', activeTab);
+      }
+    } else {
+      setActiveTab('dashboard'); // fallback
+    }
+  }, [activeTab]);
+
+  useEffect(() => {
+    localStorage.setItem('sidebarCollapsed', String(isSidebarCollapsed));
+  }, [isSidebarCollapsed]);
+
+  useEffect(() => {
+    localStorage.setItem('expandedGroups', JSON.stringify(expandedGroups));
+  }, [expandedGroups]);
+
+  const toggleGroup = (groupId: string) => {
+    setExpandedGroups(prev => 
+      prev.includes(groupId) 
+        ? prev.filter(id => id !== groupId) 
+        : [...prev, groupId]
+    );
+  };
+
+  const handleSetActiveTab = (id: ActiveTabId) => {
+    setActiveTab(id);
+    setIsSidebarOpen(false);
+  };
+
+  const activeTabLabel = activeTab ? TAB_LABELS[activeTab] : '';
+  const ActiveComponent = activeTab ? TAB_COMPONENTS[activeTab] : null;
+
+  return (
+    <div className="flex h-screen bg-[#0a0a0a] text-zinc-200 font-sans overflow-hidden">
+      
+      {/* Mobile Sidebar Overlay */}
+      {isSidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/60 z-40 lg:hidden backdrop-blur-sm transition-opacity"
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
+      {/* Sidebar */}
+      <aside 
+        className={`fixed lg:relative inset-y-0 left-0 z-50 bg-[#111111] border-r border-zinc-800 flex flex-col transition-all duration-300 ease-in-out ${
+          isSidebarOpen ? 'translate-x-0 w-64' : '-translate-x-full lg:translate-x-0'
+        } ${!isSidebarOpen && isSidebarCollapsed ? 'lg:w-20' : 'lg:w-72'}`}
+      >
+        {/* Sidebar Header */}
+        <div className="h-16 flex items-center justify-between px-4 border-b border-zinc-800/50">
+          <div className={`flex items-center gap-3 overflow-hidden transition-all duration-300 ${isSidebarCollapsed && !isSidebarOpen ? 'opacity-0 w-0' : 'opacity-100 w-auto'}`}>
+            <div className="w-10 h-10 min-w-[40px] rounded-xl overflow-hidden shadow-lg shadow-sky-500/20 border border-zinc-700 bg-zinc-950">
+              <img 
+                src="https://images.unsplash.com/photo-1548247416-ec66f4900b2e?q=80&w=200&auto=format&fit=crop" 
+                alt="Logo" 
+                className="w-full h-full object-cover brightness-110"
+                referrerPolicy="no-referrer"
+              />
+            </div>
+            <h1 className="text-lg font-bold bg-gradient-to-r from-zinc-100 to-zinc-400 bg-clip-text text-transparent whitespace-nowrap">
+              AI E-com PowerTools
+            </h1>
+          </div>
+          
+          <button 
+            className="hidden lg:flex p-2 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 rounded-lg transition-colors"
+            onClick={() => setIsSidebarCollapsed(!isSidebarCollapsed)}
+          >
+            {isSidebarCollapsed ? <PanelLeftOpen className="w-5 h-5" /> : <PanelLeftClose className="w-5 h-5" />}
+          </button>
+
+          <button 
+            className="lg:hidden text-zinc-400 hover:text-zinc-100"
+            onClick={() => setIsSidebarOpen(false)}
+          >
+            <X className="w-5 h-5" />
+          </button>
+        </div>
+
+        {/* Sidebar Navigation */}
+        <nav className="flex-1 overflow-y-auto py-4 px-3 space-y-2 custom-scrollbar">
+          {filteredTabGroups.length > 0 ? (
+            filteredTabGroups.map(group => {
+              const isExpanded = expandedGroups.includes(group.id);
+              const hasActiveTab = group.tabs.includes(activeTab as any);
+              
+              return (
+                <div key={group.id} className="space-y-1">
+                  {/* Group Header */}
+                  <button
+                    onClick={() => toggleGroup(group.id)}
+                    className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-bold transition-all duration-300 group ${
+                      isSidebarCollapsed && !isSidebarOpen ? 'justify-center' : 'justify-between'
+                    } ${hasActiveTab ? 'bg-sky-500/5 text-sky-400' : 'text-zinc-500 hover:bg-zinc-800/40 hover:text-zinc-200'}`}
+                    title={isSidebarCollapsed ? group.label : ''}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`p-1.5 rounded-lg transition-colors duration-300 ${hasActiveTab ? 'bg-sky-500/20 text-sky-400' : 'bg-zinc-900 text-zinc-500 group-hover:text-zinc-400 group-hover:bg-zinc-800'}`}>
+                        {group.icon}
+                      </div>
+                      {(!isSidebarCollapsed || isSidebarOpen) && (
+                        <span className="whitespace-nowrap tracking-tight">{group.label}</span>
+                      )}
+                    </div>
+                    {(!isSidebarCollapsed || isSidebarOpen) && (
+                      <span className={`transition-transform duration-300 ${isExpanded ? 'rotate-180' : ''}`}>
+                        <ChevronDown className="w-4 h-4 opacity-40" />
+                      </span>
+                    )}
+                  </button>
+
+                  {/* Group Tabs */}
+                  {isExpanded && (!isSidebarCollapsed || isSidebarOpen) && (
+                    <div className="ml-5 pl-4 border-l border-zinc-800/60 mt-1 space-y-1 animate-fade-in">
+                      {group.tabs.map(tabId => {
+                        const isActive = activeTab === tabId;
+                        return (
+                          <button
+                            key={tabId}
+                            onClick={() => handleSetActiveTab(tabId)}
+                            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold uppercase tracking-wider transition-all duration-300 ${
+                              isActive 
+                                ? 'text-sky-400 translate-x-1' 
+                                : 'text-zinc-500 hover:text-zinc-300 hover:translate-x-1'
+                            }`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${isActive ? 'bg-sky-500 scale-125 shadow-[0_0_8px_rgba(14,165,233,0.8)]' : 'bg-zinc-700'}`}></span>
+                            {TAB_LABELS[tabId]}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          ) : (
+            <div className="flex flex-col items-center justify-center py-10 px-4 text-center">
+              <div className="w-12 h-12 rounded-full bg-zinc-900 flex items-center justify-center mb-3">
+                <Search className="w-6 h-6 text-zinc-700" />
+              </div>
+              <p className="text-sm text-zinc-500">Không tìm thấy công cụ nào phù hợp</p>
+              <button 
+                onClick={() => setSearchQuery('')}
+                className="mt-4 text-xs text-sky-400 hover:text-sky-300 font-medium"
+              >
+                Xóa tìm kiếm
+              </button>
+            </div>
+          )}
+        </nav>
+
+        {/* Sidebar Footer */}
+        <div className="p-4 border-t border-zinc-800/50 space-y-4">
+          {isAuthReady && user && (
+            <div className={`flex items-center gap-3 p-2 rounded-xl bg-zinc-900/50 border border-zinc-800/50 ${isSidebarCollapsed && !isSidebarOpen ? 'justify-center' : ''}`}>
+              <img 
+                src={user.photoURL || ''} 
+                alt="Avatar" 
+                className="w-8 h-8 rounded-full border border-zinc-700"
+              />
+              {(!isSidebarCollapsed || isSidebarOpen) && (
+                <div className="flex-1 min-w-0">
+                  <p className="text-xs font-semibold text-zinc-200 truncate">{user.displayName}</p>
+                  <p className="text-[10px] text-zinc-500 truncate capitalize">{userProfile?.role || 'User'}</p>
+                </div>
+              )}
+              {(!isSidebarCollapsed || isSidebarOpen) && (
+                <button 
+                  onClick={() => logout()}
+                  className="p-1.5 text-zinc-500 hover:text-red-400 transition-colors"
+                  title="Đăng xuất"
+                >
+                  <LogOut className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          )}
+          <div className={`flex items-center justify-between text-xs text-zinc-500 ${isSidebarCollapsed && !isSidebarOpen ? 'flex-col gap-2' : ''}`}>
+            {(!isSidebarCollapsed || isSidebarOpen) && <span>Phiên bản</span>}
+            <span className="font-mono bg-zinc-800 px-2 py-0.5 rounded-md text-zinc-400">v{APP_VERSION}</span>
+          </div>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <div className="flex-1 flex flex-col min-w-0 overflow-hidden bg-[#0a0a0a]">
+        
+        {/* Desktop Header */}
+        <header className="hidden lg:flex h-16 items-center justify-between px-8 border-b border-zinc-800/50 bg-[#111111]/50 backdrop-blur-md sticky top-0 z-30">
+          <div className="flex-1 max-w-xl">
+            <div className="relative group">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500 group-focus-within:text-sky-400 transition-colors" />
+              <input 
+                type="text"
+                placeholder="Tìm kiếm công cụ..."
+                className="w-full bg-zinc-900/50 border border-zinc-800 rounded-xl py-2 pl-10 pr-4 text-sm text-zinc-200 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-500/50 transition-all"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-zinc-900/50 border border-zinc-800 text-[10px] text-zinc-500 uppercase tracking-widest font-bold">
+              <div className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse"></div>
+              Hệ thống ổn định
+            </div>
+            
+            {isAuthReady && !user && (
+              <button 
+                onClick={() => signInWithGoogle()}
+                className="flex items-center gap-2 px-4 py-2 bg-sky-500 hover:bg-sky-600 text-white text-sm font-semibold rounded-xl transition-all shadow-lg shadow-sky-500/20"
+              >
+                <LogIn className="w-4 h-4" />
+                Đăng nhập
+              </button>
+            )}
+          </div>
+        </header>
+
+        {/* Mobile Header */}
+        <header className="lg:hidden h-16 flex items-center justify-between px-4 border-b border-zinc-800/50 bg-[#111111]">
+          {!isSearchOpen ? (
+            <>
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg overflow-hidden border border-zinc-700 bg-zinc-950">
+                  <img 
+                    src="https://images.unsplash.com/photo-1548247416-ec66f4900b2e?q=80&w=200&auto=format&fit=crop" 
+                    alt="Logo" 
+                    className="w-full h-full object-cover brightness-110"
+                    referrerPolicy="no-referrer"
+                  />
+                </div>
+                <span className="font-bold text-zinc-100">AI E-com PowerTools</span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button 
+                  className="p-2 text-zinc-400 hover:text-zinc-100 rounded-lg hover:bg-zinc-800"
+                  onClick={() => setIsSearchOpen(true)}
+                >
+                  <Search className="w-5 h-5" />
+                </button>
+                <button 
+                  className="p-2 -mr-2 text-zinc-400 hover:text-zinc-100 rounded-lg hover:bg-zinc-800"
+                  onClick={() => setIsSidebarOpen(true)}
+                >
+                  <Menu className="w-6 h-6" />
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="flex-1 flex items-center gap-2 animate-in slide-in-from-top-2 duration-200">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-500" />
+                <input 
+                  autoFocus
+                  type="text"
+                  placeholder="Tìm kiếm..."
+                  className="w-full bg-zinc-900 border border-zinc-800 rounded-xl py-2 pl-10 pr-4 text-sm text-zinc-200 focus:outline-none focus:border-sky-500/50"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                />
+              </div>
+              <button 
+                className="p-2 text-zinc-400 hover:text-zinc-100"
+                onClick={() => {
+                  setIsSearchOpen(false);
+                  setSearchQuery('');
+                }}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+          )}
+        </header>
+
+        {/* Tab Content */}
+        <main className="flex-1 relative overflow-hidden">
+          {activeTab && ActiveComponent ? (
+            <div className="h-full overflow-y-auto custom-scrollbar animate-fade-in bg-[#080808]">
+              <div className="p-4 sm:p-6 lg:p-8 max-w-[1600px] mx-auto min-h-full">
+                <div className="mb-6 lg:mb-8 relative">
+                  <div className="absolute -left-8 -top-8 w-64 h-64 bg-sky-500/5 rounded-full blur-3xl pointer-events-none" />
+                  <div className="flex items-center gap-3 mb-2 relative z-10">
+                    <div className="p-2.5 rounded-xl bg-gradient-to-br from-sky-500/20 to-sky-600/5 text-sky-400 border border-sky-500/20 shadow-lg shadow-sky-500/10">
+                      {TAB_ICONS[activeTab]}
+                    </div>
+                    <div>
+                      <h2 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
+                        {activeTabLabel}
+                      </h2>
+                      <div className="h-1 w-12 bg-gradient-to-r from-sky-500 to-sky-600 rounded-full mt-1.5 opacity-80"></div>
+                    </div>
+                  </div>
+                </div>
+                <div className="pb-12 relative z-10">
+                  {!user && activeTab !== 'dashboard' && activeTab !== 'guide' ? (
+                    <div className="flex flex-col items-center justify-center p-12 bg-zinc-900/50 border border-zinc-800/80 rounded-2xl text-center">
+                      <ShieldAlert className="w-16 h-16 text-sky-500 mb-6 mx-auto opacity-80" />
+                      <h3 className="text-xl font-bold text-zinc-100 mb-2">Yêu cầu Đăng nhập</h3>
+                      <p className="text-zinc-400 max-w-sm mb-8">Vui lòng đăng nhập với tài khoản Google để sử dụng công cụ này. Nếu bạn chưa có quyền, hãy liên hệ Admin.</p>
+                      <button 
+                        onClick={() => signInWithGoogle()}
+                        className="flex items-center gap-2 px-6 py-3 bg-sky-500 hover:bg-sky-600 text-white text-sm font-semibold rounded-xl transition-all shadow-lg shadow-sky-500/20"
+                      >
+                        <LogIn className="w-5 h-5" />
+                        Đăng nhập với Google
+                      </button>
+                    </div>
+                  ) : userProfile?.role === 'blocked' && activeTab !== 'dashboard' && activeTab !== 'guide' ? (
+                    <div className="flex flex-col items-center justify-center p-12 bg-red-900/20 border border-red-500/20 rounded-2xl text-center">
+                      <ShieldAlert className="w-16 h-16 text-red-500 mb-6 mx-auto opacity-80" />
+                      <h3 className="text-xl font-bold text-red-100 mb-2">Tài khoản bị khóa</h3>
+                      <p className="text-red-300 max-w-sm mb-8">Tài khoản của bạn đã bị vô hiệu hóa quyền truy cập. Vui lòng liên hệ Admin để biết thêm chi tiết.</p>
+                    </div>
+                  ) : activeTab && !availableTabGroups.some(group => group.tabs.includes(activeTab as any)) ? (
+                    <div className="flex flex-col items-center justify-center p-12 bg-zinc-900/50 border border-zinc-800/80 rounded-2xl text-center">
+                      <ShieldAlert className="w-16 h-16 text-sky-500 mb-6 mx-auto opacity-80" />
+                      <h3 className="text-xl font-bold text-zinc-100 mb-2">Không có Quyền Truy Cập</h3>
+                      <p className="text-zinc-400 max-w-sm">Công cụ này hiện đang bị khóa đối với tài khoản của bạn. Vui lòng liên hệ Admin nếu bạn cần sử dụng.</p>
+                    </div>
+                  ) : (
+                    <ActiveComponent />
+                  )}
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center text-center p-8 bg-[#0a0a0a] relative overflow-hidden">
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-sky-500/5 rounded-full blur-[120px] pointer-events-none" />
+              
+              <div className="w-32 h-32 rounded-[2.5rem] overflow-hidden border border-zinc-800 flex items-center justify-center mb-8 shadow-[0_20px_50px_rgba(14,165,233,0.15)] bg-zinc-950 group hover:scale-105 transition-transform duration-500">
+                <img 
+                  src="https://images.unsplash.com/photo-1548247416-ec66f4900b2e?q=80&w=400&auto=format&fit=crop" 
+                  alt="Logo" 
+                  className="w-full h-full object-cover brightness-110 group-hover:scale-110 transition-transform duration-700"
+                  referrerPolicy="no-referrer"
+                />
+              </div>
+              <h2 className="text-3xl font-black text-white mb-3 tracking-tight">Chào mừng đến với AI E-com Tools</h2>
+              <p className="text-zinc-400 max-w-sm leading-relaxed">
+                Nền tảng hỗ trợ nhập liệu thông minh cho người bán hàng eCommerce. Chọn công cụ phù hợp để tối ưu công việc của bạn.
+              </p>
+              
+              <div className="grid grid-cols-2 gap-4 mt-12 max-w-lg w-full">
+                {[
+                  { label: 'Tối ưu Mô tả', color: 'sky' },
+                  { label: 'Đào Ảnh Gốc', color: 'emerald' },
+                  { label: 'Chỉnh sửa AI', color: 'purple' },
+                  { label: 'Chatbot Hỗ trợ', color: 'orange' }
+                ].map((item, i) => (
+                  <div key={i} className="p-4 rounded-2xl bg-zinc-900/50 border border-zinc-800/50 text-xs font-bold uppercase tracking-widest text-zinc-500 flex items-center justify-center">
+                    {item.label}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </main>
+      </div>
+      <GlobalChat />
+      <Toaster 
+        position="bottom-right"
+        toastOptions={{
+          style: {
+            background: '#27272a',
+            color: '#e4e4e7',
+            border: '1px solid #3f3f46',
+            borderRadius: '0.75rem',
+            fontSize: '0.875rem'
+          },
+          success: {
+            iconTheme: {
+              primary: '#0ea5e9',
+              secondary: '#27272a',
+            },
+          },
+        }}
+      />
+    </div>
+  );
+};
+
+export default App;

@@ -1,0 +1,6 @@
+{
+  "name": "AI E-com PowerTools",
+  "description": "Bộ công cụ AI tối ưu cho bán hàng: Luồng 1-Step liền mạch (Cào link ➔ Lọc ảnh/Tên ➔ Soạn mô tả ➔ Xuất file tổng hợp), chỉnh sửa ảnh/video và chuẩn hóa dữ liệu TMĐT.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

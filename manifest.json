@@ -1,0 +1,27 @@
+
+{
+  "name": "AI Tool Suite - Hỗ trợ nhập liệu",
+  "short_name": "AI Tools",
+  "start_url": "/",
+  "id": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#18181b",
+  "theme_color": "#18181b",
+  "orientation": "any",
+  "description": "Bộ công cụ AI đa năng: Tạo mô tả, Chỉnh sửa ảnh, Tải ảnh hàng loạt.",
+  "icons": [
+    {
+      "src": "/vite.svg",
+      "type": "image/svg+xml",
+      "sizes": "192x192",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/vite.svg",
+      "type": "image/svg+xml",
+      "sizes": "512x512",
+      "purpose": "any maskable"
+    }
+  ]
+}

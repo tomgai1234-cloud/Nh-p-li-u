@@ -1,0 +1,307 @@
+285:        return () => container.removeEventListener('wheel', handleWheel);
+286-    }, []);
+287-
+288-    const checkeredStyle = {
+289-        backgroundImage: 'linear-gradient(45deg, #2a2a2a 25%, transparent 25%), linear-gradient(-45deg, #2a2a2a 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #2a2a2a 75%), linear-gradient(-45deg, transparent 75%, #2a2a2a 75%)',
+290-        backgroundSize: '20px 20px',
+291-        backgroundPosition: '0 0, 0 10px, 10px -10px, -10px 0px'
+292-    };
+293-
+294-    const [activeMenu, setActiveMenu] = useState<string | null>(null);
+295-
+296-    const MenuDropdown = ({ title, children }: { title: string, children: React.ReactNode }) => (
+297-        <div className="relative" onMouseLeave={() => setActiveMenu(null)}>
+298-            <div 
+299-                className={`px-3 py-1 cursor-pointer rounded ${activeMenu === title ? 'bg-[#4d4d4d]' : 'hover:bg-[#4d4d4d]'}`}
+300-                onMouseEnter={() => setActiveMenu(title)}
+301-                onClick={() => setActiveMenu(activeMenu === title ? null : title)}
+302-            >
+303-                {title}
+304-            </div>
+305-            {activeMenu === title && (
+306-                <div className="absolute top-full left-0 mt-0.5 w-48 bg-[#2d2d2d] border border-[#1a1a1a] shadow-xl py-1 rounded-sm z-50">
+307-                    {children}
+308-                </div>
+309-            )}
+310-        </div>
+311-    );
+312-
+313-    const MenuItem = ({ label, onClick, disabled, shortcut }: { label: string, onClick?: () => void, disabled?: boolean, shortcut?: string }) => (
+314-        <div 
+315-            className={`px-4 py-1.5 flex justify-between items-center text-xs ${disabled ? 'text-[#666] cursor-not-allowed' : 'text-[#ccc] hover:bg-[#4d4d4d] hover:text-white cursor-pointer'}`}
+316-            onClick={() => {
+317-                if (!disabled && onClick) {
+318-                    onClick();
+319-                    setActiveMenu(null);
+320-                }
+321-            }}
+322-        >
+323-            <span>{label}</span>
+324-            {shortcut && <span className="text-[#666]">{shortcut}</span>}
+325-        </div>
+326-    );
+327-
+328:    return (
+329-        <div className="flex flex-col w-full h-full bg-[#1e1e1e] text-[#d4d4d4] font-sans text-sm overflow-hidden select-none absolute inset-0">
+330-            <input ref={fileInputRef} type="file" multiple accept="image/png, image/jpeg, image/webp, image/heic, .heic" className="hidden" onChange={handleFileChange} />
+331-            
+332-            {/* Loading Overlay */}
+333-            {isToolLoading && (
+334-                <div className="absolute inset-0 z-50 bg-[#1e1e1e]/80 backdrop-blur-sm flex flex-col items-center justify-center">
+335-                    <Spinner className="w-10 h-10 text-blue-500" />
+336-                    <p className="mt-4 font-medium animate-pulse">{loadingMessage}</p>
+337-                </div>
+338-            )}
+339-
+340-            {/* Photopea-like Top Menu Bar */}
+341-            <div className="h-9 bg-[#333333] border-b border-[#1a1a1a] flex items-center px-2 shadow-sm shrink-0">
+342-                <div className="flex items-center gap-1 font-medium text-[13px]">
+343-                    <MenuDropdown title="File">
+344-                        <MenuItem label="Open..." shortcut="Ctrl+O" onClick={triggerFileInput} />
+345-                        <MenuItem label="Save..." shortcut="Ctrl+S" disabled={images.length === 0} onClick={() => setIsSaveModalOpen(true)} />
+346-                        <MenuItem label="Close" onClick={() => activeIndex !== null && handleDeleteImage(activeIndex)} disabled={activeIndex === null} />
+347-                    </MenuDropdown>
+348-                    <MenuDropdown title="Edit">
+349-                        <MenuItem label="Undo" shortcut="Ctrl+Z" disabled={!activeImage || activeImage.history.length <= 1} onClick={handleUndo} />
+350-                    </MenuDropdown>
+351-                    <MenuDropdown title="Image">
+352-                        <MenuItem label="Crop..." onClick={() => setActiveTool('crop-rotate')} disabled={activeIndex === null} />
+353-                        <MenuItem label="Image Size..." onClick={() => setActiveTool('adjustments')} disabled={activeIndex === null} />
+354-                    </MenuDropdown>
+355-                    <span className="px-3 hover:bg-[#4d4d4d] py-1 cursor-pointer rounded">Layer</span>
+356-                    <span className="px-3 hover:bg-[#4d4d4d] py-1 cursor-pointer rounded">Select</span>
+357-                    <span className="px-3 hover:bg-[#4d4d4d] py-1 cursor-pointer rounded">Filter</span>
+358-                    <span className="px-3 hover:bg-[#4d4d4d] py-1 cursor-pointer rounded">View</span>
+359-                    <span className="px-3 hover:bg-[#4d4d4d] py-1 cursor-pointer rounded">Window</span>
+360-                    <span className="px-3 hover:bg-[#4d4d4d] py-1 cursor-pointer rounded">More</span>
+361-                </div>
+362-                <div className="ml-auto flex items-center gap-2">
+363-                    <button onClick={handleUndo} disabled={!activeImage || activeImage.history.length <= 1} className="p-1.5 hover:bg-[#4d4d4d] rounded disabled:opacity-30 disabled:hover:bg-transparent" title="Undo (Ctrl+Z)">
+364-                        <Undo className="w-4 h-4" />
+365-                    </button>
+366-                    <button onClick={() => setIsSaveModalOpen(true)} disabled={images.length === 0} className="p-1.5 hover:bg-[#4d4d4d] rounded disabled:opacity-30 disabled:hover:bg-transparent" title="Save">
+367-                        <Save className="w-4 h-4" />
+368-                    </button>
+369-                    <button onClick={() => setIsInfoModalOpen(true)} disabled={!activeImage} className="p-1.5 hover:bg-[#4d4d4d] rounded disabled:opacity-30 disabled:hover:bg-transparent" title="Info">
+370-                        <Info className="w-4 h-4" />
+371-                    </button>
+372-                </div>
+373-            </div>
+374-
+375-            {/* Tool Options Bar */}
+376-            <div className="h-10 bg-[#3a3a3a] border-b border-[#1a1a1a] flex items-center px-3 gap-4 shrink-0 shadow-sm z-10">
+377-                {activeTool === 'move' && <span className="text-xs text-[#999]">Auto-Select: Layer</span>}
+378-                {activeTool === 'crop-rotate' && (
+379-                    <div className="flex items-center gap-2">
+380-                        <button onClick={handleCropApply} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1 rounded text-xs">Apply Crop</button>
+381-                        <button onClick={() => { setActiveTool('move'); setCrop(undefined); }} className="hover:bg-[#4d4d4d] px-3 py-1 rounded text-xs">Cancel</button>
+382-                    </div>
+383-                )}
+384-                {/* Dynamically render options based on activeTool */}
+385-                {!['move', 'crop-rotate'].includes(activeTool as string) && (
+386-                    <span className="text-xs text-[#999] capitalize">{String(activeTool).replace('-', ' ')} Tool</span>
+387-                )}
+388-                
+389-                <div className="ml-auto flex items-center gap-4">
+390-                    <div className="flex items-center gap-1 text-xs">
+391-                        <button onClick={() => setZoom(prev => Math.max(0.1, prev - 0.1))} className="hover:bg-[#4d4d4d] p-1 rounded" title="Zoom Out">-</button>
+392-                        <span className="text-[#999] w-12 text-center">{Math.round(zoom * 100)}%</span>
+393-                        <button onClick={() => setZoom(prev => Math.min(10, prev + 0.1))} className="hover:bg-[#4d4d4d] p-1 rounded" title="Zoom In">+</button>
+394-                        <button onClick={() => setZoom(1)} className="hover:bg-[#4d4d4d] px-2 py-0.5 ml-1 rounded" title="Reset Zoom">Reset</button>
+395-                    </div>
+396-                    <label className="flex items-center gap-2 cursor-pointer bg-[#2a2a2a] hover:bg-[#333] px-3 py-1 rounded border border-[#444]">
+397-                        <input type="checkbox" checked={isBatchEdit} onChange={(e) => setIsBatchEdit(e.target.checked)} className="rounded bg-[#1a1a1a] border-[#555]" />
+398-                        <span className="text-xs font-medium text-[#ccc]">Batch Edit Mode</span>
+399-                    </label>
+400-                </div>
+401-            </div>
+402-
+403-            <div className="flex flex-1 overflow-hidden">
+404-                {/* Left Toolbar (Vertical) */}
+405-                <div className="w-10 bg-[#2d2d2d] border-r border-[#1a1a1a] flex flex-col items-center py-2 gap-1 shrink-0 z-10 shadow-md">
+406-                    {TOOLS.map(t => (
+407-                        <button 
+408-                            key={t.id}
+409-                            onClick={() => setActiveTool(t.id as any)}
+410-                            className={`p-2 rounded-md transition-colors ${activeTool === t.id ? 'bg-[#1a1a1a] text-white' : 'text-[#a0a0a0] hover:text-white hover:bg-[#404040]'}`}
+411-                            title={t.label}
+412-                        >
+413-                            <t.icon className="w-4 h-4 stroke-[1.5]" />
+414-                        </button>
+415-                    ))}
+416-                </div>
+417-
+418-                {/* Main Canvas Area */}
+419-                <div className="flex-1 flex flex-col relative overflow-hidden bg-[#242424]">
+420-                    {/* Document Tabs */}
+421-                    {images.length > 0 && (
+422-                        <div className="h-8 bg-[#2d2d2d] border-b border-[#1a1a1a] flex items-end px-1 overflow-x-auto no-scrollbar shrink-0 gap-0.5">
+423-                            {isBatchEdit && images.length > 0 && (
+424-                                <button onClick={handleToggleSelectAll} className="px-3 py-1 text-xs text-[#888] hover:text-white shrink-0">
+425-                                    {images.every(img => img.isSelected) ? 'Deselect All' : 'Select All'}
+426-                                </button>
+427-                            )}
+428-                            {images.map((img, idx) => (
+429-                                <div 
+430-                                    key={img.id}
+431-                                    onClick={() => setActiveIndex(idx)}
+432-                                    className={`px-3 py-1.5 max-w-[200px] flex items-center gap-2 rounded-t-sm text-[11px] cursor-pointer border-t-[2px] transition-colors ${activeIndex === idx ? 'bg-[#242424] text-white border-blue-500' : 'bg-[#333333] text-[#888] border-transparent hover:bg-[#3a3a3a]'}`}
+433-                                >
+434-                                    {isBatchEdit && (
+435-                                        <input 
+436-                                            type="checkbox" 
+437-                                            checked={img.isSelected} 
+438-                                            onChange={() => handleToggleSelection(idx)}
+439-                                            onClick={e => e.stopPropagation()}
+440-                                            className="w-3 h-3 cursor-pointer"
+441-                                        />
+442-                                    )}
+443-                                    <span className="truncate">{img.file.name}</span>
+444-                                    <button 
+445-                                        onClick={(e) => { e.stopPropagation(); handleDeleteImage(idx); }}
+446-                                        className={`p-0.5 rounded-full hover:bg-red-500 hover:text-white transition-colors ${activeIndex === idx ? 'text-[#ccc]' : 'text-[#666]'}`}
+447-                                    >
+448-                                        <X className="w-3 h-3" />
+449-                                    </button>
+450-                                </div>
+451-                            ))}
+452-                        </div>
+453-                    )}
+454-
+455-                    <div 
+456-                        ref={canvasContainerRef}
+457-                        className="flex-1 overflow-hidden relative p-8 flex items-center justify-center"
+458-                        style={checkeredStyle}
+459-                        onDragOver={handleDragOver} onDragEnter={handleDragEnter} onDragLeave={handleDragLeave} onDrop={handleDrop}
+460-                    >
+461-                        {isDraggingOver && (
+462-                            <div className="absolute inset-0 z-40 bg-blue-500/10 border-2 border-blue-500 m-2 flex items-center justify-center backdrop-blur-sm pointer-events-none">
+463-                                <h3 className="text-xl font-bold text-blue-400">Drop image to open</h3>
+464-                            </div>
+465-                        )}
+466-                        
+467-                        {images.length === 0 ? (
+468-                            <div className="text-center text-[#555]">
+469-                                <ImageIcon className="w-16 h-16 mx-auto mb-4 opacity-50" />
+470-                                <p className="mb-4">No documents open</p>
+471-                                <Button onClick={triggerFileInput} className="!w-auto px-6 bg-[#333] hover:bg-[#444] text-white border-0">Open from Computer</Button>
+472-                            </div>
+473-                        ) : (
+474-                            activeImage && (
+475-                                <div className="relative shadow-2xl transition-transform duration-75" style={{ transform: `scale(${zoom})`, transformOrigin: 'center center' }}>
+476-                                    {activeTool === 'crop-rotate' ? (
+477-                                        <ReactCrop crop={crop} onChange={(_, p) => setCrop(p)} onComplete={(c) => setCrop(c)} aspect={aspect}>
+478-                                            <img ref={imgRef} src={activeImage.url} alt="Editing" className="block max-w-[80vw] max-h-[70vh] object-contain" onLoad={onImageLoad} />
+479-                                        </ReactCrop>
+480-                                    ) : (
+481-                                        <div className="relative group">
+482-                                            <img src={displayUrl} alt="Preview" className="block max-w-[80vw] max-h-[70vh] object-contain" 
+483-                                                 style={activeTool === 'color' ? { filter: `brightness(${brightness}%) contrast(${contrast}%) saturate(${saturation}%)` } : {}} />
+484-                                            
+485-                                            {/* Compare Button */}
+486-                                            {activeImage.history.length > 1 && (
+487-                                                <button
+488-                                                    className="absolute bottom-4 right-4 bg-black/60 backdrop-blur-sm text-white px-3 py-1.5 rounded-full text-xs font-medium flex items-center gap-2 hover:bg-black/80 transition-colors z-20"
+489-                                                    onMouseDown={() => setIsComparing(true)} onMouseUp={() => setIsComparing(false)} onMouseLeave={() => setIsComparing(false)}
+490-                                                >
+491-                                                    <Eye className="w-3.5 h-3.5" /> Hold to Compare
+492-                                                </button>
+493-                                            )}
+494-                                        </div>
+495-                                    )}
+496-                                </div>
+497-                            )
+498-                        )}
+499-                    </div>
+500-
+501-                    {/* AI Chat Prompt at Bottom */}
+502-                    <div className="h-14 bg-[#2d2d2d] border-t border-[#1a1a1a] flex items-center px-4 shrink-0 shadow-[0_-4px_10px_rgba(0,0,0,0.1)] z-10">
+503-                        <form onSubmit={handleAIChatSubmit} className="flex-1 flex items-center gap-3 max-w-4xl mx-auto">
+504-                            <Sparkles className="w-5 h-5 text-blue-400 shrink-0" />
+505-                            <input 
+506-                                ref={chatInputRef}
+507-                                type="text" 
+508-                                value={aiPrompt}
+509-                                onChange={(e) => setAiPrompt(e.target.value)}
+510-                                placeholder="Describe the edits you want AI to make (e.g., 'Remove the background', 'Make it brighter')" 
+511-                                className="flex-1 bg-[#1e1e1e] border border-[#3a3a3a] rounded-full px-4 py-1.5 text-sm text-[#eee] focus:outline-none focus:border-blue-500 transition-colors placeholder-[#666]"
+512-                                disabled={!activeImage || isLoading}
+513-                            />
+514-                            <button 
+515-                                type="submit" 
+516-                                disabled={!activeImage || !aiPrompt.trim() || isLoading}
+517-                                className="bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:hover:bg-blue-600 text-white px-5 py-1.5 rounded-full text-sm font-medium transition-colors"
+518-                            >
+519-                                Generate
+520-                            </button>
+521-                        </form>
+522-                    </div>
+523-                </div>
+524-
+525-                {/* Right Panels */}
+526-                <div className="w-64 bg-[#2d2d2d] border-l border-[#1a1a1a] flex flex-col shrink-0 z-10 shadow-md">
+527-                    {/* Layers Panel Header */}
+528-                    <div className="h-8 bg-[#383838] border-b border-[#222] flex items-center px-3 text-xs font-semibold text-[#ccc] gap-2">
+529-                        <Layers className="w-3.5 h-3.5" />
+530-                        Layers
+531-                    </div>
+532-                    
+533-                    <div className="flex-1 p-2 overflow-y-auto bg-[#242424]">
+534-                         {activeImage ? (
+535-                             <div className="bg-[#333] border border-blue-500 rounded p-2 flex items-center gap-3 cursor-pointer">
+536-                                 <Eye className="w-3.5 h-3.5 text-[#ccc]" />
+537-                                 <div className="w-8 h-8 bg-[#444] rounded overflow-hidden flex-shrink-0" style={checkeredStyle}>
+538-                                    <img src={activeImage.url} className="w-full h-full object-cover" />
+539-                                 </div>
+540-                                 <span className="text-xs truncate text-white">{activeImage.file.name}</span>
+541-                             </div>
+542-                         ) : (
+543-                             <div className="text-xs text-[#666] text-center mt-4">No layers</div>
+544-                         )}
+545-                    </div>
+546-
+547-                    {/* History Panel */}
+548-                    <div className="h-8 bg-[#383838] border-b border-t border-[#222] flex items-center px-3 text-xs font-semibold text-[#ccc] gap-2">
+549-                        <History className="w-3.5 h-3.5" />
+550-                        History
+551-                    </div>
+552-                    <div className="h-1/3 p-2 overflow-y-auto bg-[#242424]">
+553-                        {activeImage?.history.map((url, idx) => (
+554-                            <div key={idx} className={`text-xs p-1.5 rounded mb-0.5 cursor-pointer flex items-center gap-2 ${idx === activeImage.history.length - 1 ? 'bg-[#333] text-white' : 'text-[#888] hover:bg-[#2a2a2a]'}`}>
+555-                                <div className={`w-1.5 h-1.5 rounded-full ${idx === activeImage.history.length - 1 ? 'bg-blue-500' : 'bg-transparent'}`} />
+556-                                {idx === 0 ? 'Open' : `Edit ${idx}`}
+557-                            </div>
+558-                        ))}
+559-                    </div>
+560-                </div>
+561-            </div>
+562-
+563-            {/* Render legacy side panels over the canvas if needed for complex tools */}
+564-            <AnimatePresence>
+565-                {activeTool && !['move', 'crop-rotate', 'ai-magic'].includes(activeTool as string) && (
+566-                    <motion.div initial={{ x: -20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} exit={{ x: -20, opacity: 0 }} className="absolute left-[3.25rem] top-24 bottom-20 w-72 bg-[#2d2d2d] border border-[#1a1a1a] shadow-2xl z-20 flex flex-col rounded-lg overflow-hidden">
+567-                        <div className="h-9 bg-[#383838] border-b border-[#222] flex justify-between items-center px-3 shrink-0">
+568-                            <span className="text-xs font-semibold text-[#ccc] capitalize">{String(activeTool).replace('-', ' ')}</span>
+569-                            <button onClick={() => setActiveTool('move')} className="text-[#888] hover:text-white"><X className="w-3.5 h-3.5"/></button>
+570-                        </div>
+571-                        <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+572-                            {/* We re-use some of the legacy panels here for advanced editing options */}
+573-                            {activeTool === 'color' && <ColorAdjustmentPanel brightness={brightness} contrast={contrast} saturation={saturation} setBrightness={setBrightness} setContrast={setContrast} setSaturation={setSaturation} onApply={() => setActiveTool('move')} onCancel={() => { setBrightness(100); setContrast(100); setSaturation(100); setActiveTool('move'); }} />}
+574-                            {activeTool === 'adjustments' && <AdjustmentPanel currentDimensions={activeImage.dimensions} isBatchEdit={isBatchEdit} customSizePresets={customSizePresets} onManagePresets={() => setIsManagePresetsModalOpen(true)} onResize={handleResize} onRecanvas={handleRecanvas} onAutoResize={handleAutoResize} />}
+575-                            {activeTool === 'upscale' && <UpscalePanel currentDimensions={activeImage.dimensions} onUpscale={() => {}} isLoading={isToolLoading} />}
+576-                            {activeTool === 'frame' && <FramePanel onApplyFrame={() => {}} onCancel={() => setActiveTool('move')} onRemoveBg={async () => new File([],'')} />}
+577-                            {activeTool === 'watermark' && <WatermarkPanel onApply={() => {}} onCancel={() => setActiveTool('move')} />}
+578-                            {activeTool === 'ai-magic' && <AiPanel prompt={aiPrompt} setPrompt={setAiPrompt} onGenerativeEdit={(p, q) => handleGenerativeEdit(p, q)} onRemoveBackground={() => handleGenerativeEdit('Remove the background.', 'speed')} isLoading={isToolLoading} />}
+579-                        </div>
+580-                    </motion.div>
+581-                )}
+582-            </AnimatePresence>
+583-
+584-            <ImageInfoModal isOpen={isInfoModalOpen} onClose={() => setIsInfoModalOpen(false)} image={activeImage} />
+585-            <ManageCustomSizesModal isOpen={isManagePresetsModalOpen} onClose={() => setIsManagePresetsModalOpen(false)} presets={customSizePresets} onSave={setCustomSizePresets} />
+586-            <SaveModal isOpen={isSaveModalOpen} onClose={() => setIsSaveModalOpen(false)} onSave={async () => {}} image={activeImage} imageCount={1} />
+587-        </div>
+588-    );
+589-};
+590-
+591-export default ImageEditorTab;
